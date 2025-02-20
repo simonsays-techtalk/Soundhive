@@ -1,0 +1,10 @@
+# soundhive_media_player/manifest.json
+manifest_json = '''{
+    "domain": "soundhive_media_player",
+    "name": "Soundhive Media Player",
+    "version": "0.1.0",
+    "documentation": "https://github.com/simonsays-techtalk/soundhive",
+    "dependencies": ["mqtt"],
+    "requirements": [],
+    "codeowners": ["simonsays-techtalk"]
+}'''
