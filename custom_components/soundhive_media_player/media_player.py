@@ -1,29 +1,27 @@
 # soundhive_media_player/media_player.py
 # Soundhive: Custom Home Assistant MQTT Media Player with TTS Support
-# Version: 0.2.0 (Updated Imports & Logging)
+# Version: 0.3.0 (Updated for HA 2025.10 compatibility)
 #
 # Changelog:
-# v0.2.0 - Added missing imports, ensured correct logging, and confirmed SUPPORT_PLAY_MEDIA exposure (Feb 20, 2025)
+# v0.3.0 - Replaced deprecated SUPPORT_* constants with MediaPlayerEntityFeature.* for HA Core 2025.10+ compatibility (Feb 20, 2025)
 
 import logging
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import (
-    SUPPORT_PLAY,
-    SUPPORT_PAUSE,
-    SUPPORT_STOP,
-    SUPPORT_VOLUME_SET,
-    SUPPORT_TURN_ON,
-    SUPPORT_TURN_OFF,
-    SUPPORT_PLAY_MEDIA
+    MediaPlayerEntityFeature
 )
 from homeassistant.const import STATE_IDLE, STATE_PLAYING, STATE_PAUSED
 
 _LOGGER = logging.getLogger(__name__)
 
 SUPPORT_SOUNDHIVE = (
-    SUPPORT_PLAY | SUPPORT_PAUSE | SUPPORT_STOP |
-    SUPPORT_VOLUME_SET | SUPPORT_TURN_ON | SUPPORT_TURN_OFF |
-    SUPPORT_PLAY_MEDIA
+    MediaPlayerEntityFeature.PLAY |
+    MediaPlayerEntityFeature.PAUSE |
+    MediaPlayerEntityFeature.STOP |
+    MediaPlayerEntityFeature.VOLUME_SET |
+    MediaPlayerEntityFeature.TURN_ON |
+    MediaPlayerEntityFeature.TURN_OFF |
+    MediaPlayerEntityFeature.PLAY_MEDIA
 )
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
@@ -92,10 +90,8 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._volume = volume
         self.async_write_ha_state()
 
-# ✅ Version 0.2.0: Updated imports, ensured proper SUPPORT_PLAY_MEDIA exposure, and logging improvements.
+# ✅ Version 0.3.0: Updated deprecated constants to MediaPlayerEntityFeature.* for HA Core 2025.10 compatibility.
 # Next Steps:
 # - Implement MQTT communication for playback actions.
 # - Test TTS playback through Home Assistant's tts.speak service.
 # - Confirm auto-discovery behavior in Home Assistant UI.
-
-
