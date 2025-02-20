@@ -1,4 +1,4 @@
-hacs_json = '''{
+'''{
     "name": "Soundhive Media Player",
     "content_in_root": false,
     "zip_release": false,
