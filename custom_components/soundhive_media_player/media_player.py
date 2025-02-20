@@ -1,20 +1,21 @@
 # soundhive_media_player/media_player.py
 # Soundhive: Custom Home Assistant MQTT Media Player with TTS Support
-# Version: 0.5.2 (Fixed media-source resolution import issue and async handling)
+# Version: 0.6.0 (Added media_type to MQTT payload to ensure proper playback)
 #
 # Changelog:
-# v0.5.2 - Replaced incorrect import with async_resolve_media_path from media_source helper (Feb 20, 2025)
+# v0.6.0 - Added 'media_type' field to MQTT payload to indicate MP3 format for correct playback handling (Feb 20, 2025)
 
 import logging
 import asyncio
 import json
+import socket
 import paho.mqtt.client as mqtt
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import (
     MediaPlayerEntityFeature
 )
 from homeassistant.const import STATE_IDLE, STATE_PLAYING, STATE_PAUSED
-from homeassistant.helpers.media_source import async_resolve_media
+from homeassistant.components.media_source import async_resolve_media
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +35,18 @@ SUPPORT_SOUNDHIVE = (
     MediaPlayerEntityFeature.TURN_OFF |
     MediaPlayerEntityFeature.PLAY_MEDIA
 )
+
+def get_local_ip():
+    """Retrieve the local IP address of the machine running Home Assistant."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up the Soundhive Media Player entity."""
@@ -88,8 +101,15 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         # Resolve media-source:// URLs to HTTP URLs
         if media_id.startswith("media-source://"):
             try:
-                resolved = await async_resolve_media(self._hass, media_id)
-                media_id = resolved.url
+                resolved = await async_resolve_media(self._hass, media_id, self.entity_id)
+                base_url = (
+                    self._hass.config.external_url
+                    or self._hass.config.internal_url
+                    or f"http://{get_local_ip()}:8123"
+                )
+                if not base_url:
+                    raise Exception("Base URL is not set and could not be defaulted.")
+                media_id = base_url + resolved.url
                 _LOGGER.info(f"🔗 Resolved media-source URL to: {media_id}")
             except Exception as e:
                 _LOGGER.error(f"❌ Failed to resolve media-source URL: {e}")
@@ -97,11 +117,12 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
                 self.async_write_ha_state()
                 return
 
-        # Send MQTT command to the Soundhive MQTT client
+        # Send MQTT command to the Soundhive MQTT client with media_type specified
         mqtt_payload = {
             "command": "play",
             "args": {
-                "filepath": media_id
+                "filepath": media_id,
+                "media_type": "audio/mp3"
             }
         }
         try:
@@ -132,8 +153,8 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._volume = volume
         self.async_write_ha_state()
 
-# ✅ Version 0.5.2: Fixed import issue by using async_resolve_media from helpers.media_source.
+# ✅ Version 0.6.0: Added 'media_type' to MQTT payload for correct playback handling.
 # Next Steps:
-# - Retest TTS playback with updated media resolution logic.
-# - Ensure full end-to-end playback through MQTT client v4.0.0.
-# - Confirm stable audio output and state updates.
+# - Retest TTS playback to confirm static noise issue is resolved.
+# - Ensure MQTT client v4.0.0 interprets 'audio/mp3' correctly.
+# - Confirm stable end-to-end audio playback and proper state reporting.
