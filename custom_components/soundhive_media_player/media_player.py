@@ -1,9 +1,9 @@
 # soundhive_media_player/media_player.py
 # Soundhive: Custom Home Assistant MQTT Media Player with TTS Support
-# Version: 0.5.1 (Fixed async media-source resolution import issue)
+# Version: 0.5.2 (Fixed media-source resolution import issue and async handling)
 #
 # Changelog:
-# v0.5.1 - Imported async_resolve_media correctly using HA's async_get_media_source helper (Feb 20, 2025)
+# v0.5.2 - Replaced incorrect import with async_resolve_media_path from media_source helper (Feb 20, 2025)
 
 import logging
 import asyncio
@@ -14,7 +14,7 @@ from homeassistant.components.media_player.const import (
     MediaPlayerEntityFeature
 )
 from homeassistant.const import STATE_IDLE, STATE_PLAYING, STATE_PAUSED
-from homeassistant.components.media_source import async_get_media_source
+from homeassistant.helpers.media_source import async_resolve_media
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,8 +88,7 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         # Resolve media-source:// URLs to HTTP URLs
         if media_id.startswith("media-source://"):
             try:
-                media_source = async_get_media_source(self._hass)
-                resolved = await media_source.async_resolve_media(media_id, self._hass)
+                resolved = await async_resolve_media(self._hass, media_id)
                 media_id = resolved.url
                 _LOGGER.info(f"🔗 Resolved media-source URL to: {media_id}")
             except Exception as e:
@@ -133,7 +132,7 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._volume = volume
         self.async_write_ha_state()
 
-# ✅ Version 0.5.1: Fixed import issue by using async_get_media_source for media-source URL resolution.
+# ✅ Version 0.5.2: Fixed import issue by using async_resolve_media from helpers.media_source.
 # Next Steps:
 # - Retest TTS playback with updated media resolution logic.
 # - Ensure full end-to-end playback through MQTT client v4.0.0.
