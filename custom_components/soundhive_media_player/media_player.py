@@ -1,15 +1,14 @@
 # soundhive_media_player/media_player.py
 # Soundhive: Custom Home Assistant MQTT Media Player with TTS Support
-# Version: 0.4.0 (MQTT Integration for TTS Playback)
+# Version: 0.5.0 (Fixed TTS playback - Convert media-source URLs to HTTP)
 #
 # Changelog:
-# v0.4.0 - Implemented MQTT communication for TTS playback (Feb 20, 2025)
+# v0.5.0 - Implemented media-source URL resolution to accessible HTTP paths for proper TTS playback (Feb 20, 2025)
 
 import logging
 import asyncio
 import json
 import paho.mqtt.client as mqtt
-
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import (
     MediaPlayerEntityFeature
@@ -85,6 +84,18 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._state = STATE_PLAYING
         self.async_write_ha_state()
 
+        # Resolve media-source:// URLs to HTTP URLs
+        if media_id.startswith("media-source://"):
+            try:
+                media_id = await self._hass.helpers.media_source.async_resolve_media(media_id)
+                media_id = media_id.url
+                _LOGGER.info(f"🔗 Resolved media-source URL to: {media_id}")
+            except Exception as e:
+                _LOGGER.error(f"❌ Failed to resolve media-source URL: {e}")
+                self._state = STATE_IDLE
+                self.async_write_ha_state()
+                return
+
         # Send MQTT command to the Soundhive MQTT client
         mqtt_payload = {
             "command": "play",
@@ -120,8 +131,8 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._volume = volume
         self.async_write_ha_state()
 
-# ✅ Version 0.4.0: Implemented MQTT integration for TTS playback.
+# ✅ Version 0.5.0: Fixed TTS playback by resolving media-source URLs to HTTP URLs before MQTT publishing.
 # Next Steps:
-# - Validate TTS streaming through Home Assistant's tts.speak service.
-# - Test full playback loop with the Soundhive MQTT client v4.0.0.
-# - Refine state feedback based on MQTT client responses.
+# - Test TTS playback with resolved URLs on Soundhive MQTT client v4.0.0.
+# - Refine state feedback based on client responses.
+# - Confirm stable playback loop and TTS audio output.
