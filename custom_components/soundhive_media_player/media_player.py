@@ -1,9 +1,9 @@
 # soundhive_media_player/media_player.py
 # Soundhive: Custom Home Assistant MQTT Media Player with TTS Support
-# Version: 0.5.0 (Fixed TTS playback - Convert media-source URLs to HTTP)
+# Version: 0.5.1 (Fixed async media-source resolution import issue)
 #
 # Changelog:
-# v0.5.0 - Implemented media-source URL resolution to accessible HTTP paths for proper TTS playback (Feb 20, 2025)
+# v0.5.1 - Imported async_resolve_media correctly using HA's async_get_media_source helper (Feb 20, 2025)
 
 import logging
 import asyncio
@@ -14,6 +14,7 @@ from homeassistant.components.media_player.const import (
     MediaPlayerEntityFeature
 )
 from homeassistant.const import STATE_IDLE, STATE_PLAYING, STATE_PAUSED
+from homeassistant.components.media_source import async_get_media_source
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,8 +88,9 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         # Resolve media-source:// URLs to HTTP URLs
         if media_id.startswith("media-source://"):
             try:
-                media_id = await self._hass.helpers.media_source.async_resolve_media(media_id)
-                media_id = media_id.url
+                media_source = async_get_media_source(self._hass)
+                resolved = await media_source.async_resolve_media(media_id, self._hass)
+                media_id = resolved.url
                 _LOGGER.info(f"🔗 Resolved media-source URL to: {media_id}")
             except Exception as e:
                 _LOGGER.error(f"❌ Failed to resolve media-source URL: {e}")
@@ -131,8 +133,8 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._volume = volume
         self.async_write_ha_state()
 
-# ✅ Version 0.5.0: Fixed TTS playback by resolving media-source URLs to HTTP URLs before MQTT publishing.
+# ✅ Version 0.5.1: Fixed import issue by using async_get_media_source for media-source URL resolution.
 # Next Steps:
-# - Test TTS playback with resolved URLs on Soundhive MQTT client v4.0.0.
-# - Refine state feedback based on client responses.
-# - Confirm stable playback loop and TTS audio output.
+# - Retest TTS playback with updated media resolution logic.
+# - Ensure full end-to-end playback through MQTT client v4.0.0.
+# - Confirm stable audio output and state updates.
