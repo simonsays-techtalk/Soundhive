@@ -1,4 +1,3 @@
-# soundhive_media_player/hacs.json
 hacs_json = '''{
     "name": "Soundhive Media Player",
     "content_in_root": false,
