@@ -1,9 +1,9 @@
-'''{
+{
     "name": "Soundhive Media Player",
     "content_in_root": false,
     "zip_release": false,
     "filename": "soundhive_media_player/__init__.py",
     "domains": ["media_player"],
     "country": "any"
-}'''
+}
 
