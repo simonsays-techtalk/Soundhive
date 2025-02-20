@@ -1,4 +1,11 @@
 # soundhive_media_player/media_player.py
+# Soundhive: Custom Home Assistant MQTT Media Player with TTS Support
+# Version: 0.2.0 (Updated Imports & Logging)
+#
+# Changelog:
+# v0.2.0 - Added missing imports, ensured correct logging, and confirmed SUPPORT_PLAY_MEDIA exposure (Feb 20, 2025)
+
+import logging
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import (
     SUPPORT_PLAY,
@@ -21,6 +28,7 @@ SUPPORT_SOUNDHIVE = (
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up the Soundhive Media Player entity."""
+    _LOGGER.info("✅ Setting up Soundhive Media Player platform.")
     async_add_entities([SoundhiveMediaPlayer(hass)])
 
 class SoundhiveMediaPlayer(MediaPlayerEntity):
@@ -47,33 +55,47 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         return SUPPORT_SOUNDHIVE
 
     async def async_turn_on(self):
+        _LOGGER.info("🔌 Turning on Soundhive Media Player.")
         self._state = STATE_IDLE
         self.async_write_ha_state()
 
     async def async_turn_off(self):
+        _LOGGER.info("🔌 Turning off Soundhive Media Player.")
         self._state = STATE_IDLE
         self.async_write_ha_state()
 
     async def async_play_media(self, media_type, media_id, **kwargs):
         """Handle playing media with support for TTS streaming."""
-        _LOGGER.info(f"🎵 Received media request: {media_id}")
+        _LOGGER.info(f"🎵 Received media request: {media_id} (type: {media_type})")
         self._media_content_id = media_id
         self._state = STATE_PLAYING
         self.async_write_ha_state()
         # TODO: Send MQTT command to Soundhive client for playback
 
     async def async_media_pause(self):
+        _LOGGER.info("⏸ Pausing media.")
         self._state = STATE_PAUSED
         self.async_write_ha_state()
 
     async def async_media_stop(self):
+        _LOGGER.info("⏹ Stopping media.")
         self._state = STATE_IDLE
         self.async_write_ha_state()
 
     async def async_media_play(self):
+        _LOGGER.info("▶️ Resuming media.")
         self._state = STATE_PLAYING
         self.async_write_ha_state()
 
     async def async_set_volume_level(self, volume):
+        _LOGGER.info(f"🔊 Setting volume to {volume * 100}%.")
         self._volume = volume
         self.async_write_ha_state()
+
+# ✅ Version 0.2.0: Updated imports, ensured proper SUPPORT_PLAY_MEDIA exposure, and logging improvements.
+# Next Steps:
+# - Implement MQTT communication for playback actions.
+# - Test TTS playback through Home Assistant's tts.speak service.
+# - Confirm auto-discovery behavior in Home Assistant UI.
+
+
