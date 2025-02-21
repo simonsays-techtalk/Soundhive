@@ -24,7 +24,7 @@ _LOGGER = logging.getLogger("SoundhiveMQTTClient")
 VERSION = "1.1.4 (Fixed Streaming Handling & Device Routing)"
 
 # MQTT Configuration
-MQTT_BROKER = os.getenv("MQTT_BROKER", "homeassistanttest.local")
+MQTT_BROKER = os.getenv("MQTT_BROKER", "homeassistant.local")
 MQTT_PORT = 1883
 MQTT_USER = os.getenv("MQTT_USER", "")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
