@@ -18,8 +18,8 @@ manifest_json = '''{
     "domain": "soundhive_media_player",
     "name": "Soundhive Media Player",
     "version": "0.1.0",
-    "documentation": "https://github.com/yourusername/soundhive",
+    "documentation": "https://github.com/simonsaystechtalk/soundhive",
     "dependencies": ["mqtt"],
     "requirements": [],
-    "codeowners": ["@yourusername"]
+    "codeowners": ["@simonsaystechtalk"]
 }'''
