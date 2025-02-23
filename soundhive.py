@@ -1,194 +1,183 @@
-# Self-Hosted MQTT Media Player for Home Assistant (Standalone)
-# Version: 4.0.0
-# Description:
-# - Implemented workaround for TTS playback by converting `play_media` action to `play` with filepath handling.
-# - Bypasses reliance on unsupported `play_media` in TroyFernandes' component.
-# - Streams TTS audio to a local file and plays it with `aplay`.
-# - Optimized for rapid TTS playback without additional component changes.
-#
-# Changelog:
-# v4.0.0 - Workaround for TTS playback using `play` action (Feb 20, 2025)
+# soundhive_mqtt_client.py
+# Soundhive MQTT Client: Version 1.2.1 (Dynamic Unique ID & Multi-Instance Support)
+# Version: 1.2.1
 
-import paho.mqtt.client as mqtt
 import logging
-import subprocess
 import json
+import os
+import requests
+import subprocess
+import signal
+import paho.mqtt.client as mqtt
+import time
 
 try:
-    import requests
+    from mutagen.mp3 import MP3
 except ImportError:
-    print("❌ The 'requests' module is not installed. Please run 'pip install requests' and try again.")
-    exit(1)
+    print("⚠️ 'mutagen' not found. Attempting to install...")
+    subprocess.check_call(["python3", "-m", "pip", "install", "mutagen"])
+    from mutagen.mp3 import MP3
 
-# Configuration
-MQTT_BROKER = "192.168.188.62"
+logging.basicConfig(level=logging.DEBUG)
+_LOGGER = logging.getLogger("SoundhiveMQTTClient")
+
+VERSION = "1.2.1 (Dynamic Unique ID & Multi-Instance Support)"
+
+MQTT_BROKER = os.getenv("MQTT_BROKER", "homeassistanttest.local")
 MQTT_PORT = 1883
-MQTT_USER = "test"
-MQTT_PASSWORD = "test"
-MQTT_ENTITY_ID = "selfhosted_mediaplayer"
-MQTT_DISCOVERY_PREFIX = "homeassistant/mqtt-mediaplayer"
-MQTT_DISCOVERY_TOPIC = f"{MQTT_DISCOVERY_PREFIX}/{MQTT_ENTITY_ID}/config"
-MQTT_COMMAND_TOPIC = f"{MQTT_ENTITY_ID}/command"
-MQTT_STATE_TOPIC = f"{MQTT_ENTITY_ID}/state"
-MQTT_AVAILABLE_TOPIC = f"{MQTT_ENTITY_ID}/available"
+MQTT_USER = os.getenv("MQTT_USER", "")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 
-AUDIO_DEVICE = "plughw:CARD=MS,DEV=0"
-DEFAULT_AUDIO_FILE = "/home/satellite/wyoming-satellite/sounds/awake.wav"
-TTS_TEMP_FILE = "/tmp/tts_stream.wav"
+if not MQTT_USER:
+    MQTT_USER = input("🔐 Enter MQTT Username: ")
+    MQTT_PASSWORD = input("🔐 Enter MQTT Password: ")
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+# Prompt for unique media player name
+MEDIA_PLAYER_NAME = input("📝 Enter a unique name for this Soundhive Media Player (default: Soundhive_mediaplayer): ") or "Soundhive_mediaplayer"
 
-def publish_state(client, state):
-    """Publish current state to MQTT for Home Assistant visibility."""
-    try:
-        payload = json.dumps({"status": state})
-        client.publish(MQTT_STATE_TOPIC, payload, retain=True)
-        logging.info(f"📡 State updated to: {state}")
-    except Exception as e:
-        logging.error(f"❌ State publishing error: {e}")
+MQTT_TOPIC_COMMAND = f"{MEDIA_PLAYER_NAME}/command"
+MQTT_TOPIC_STATE = f"{MEDIA_PLAYER_NAME}/state"
+MQTT_TOPIC_NOW_PLAYING = f"{MEDIA_PLAYER_NAME}/now_playing"
+MQTT_TOPIC_VOLUME = f"{MEDIA_PLAYER_NAME}/volume"
 
-def publish_discovery(client):
-    """Publish MQTT discovery payload for hass-mqtt-mediaplayer integration."""
-    discovery_payload = {
-        "name": "Self-Hosted MQTT Media Player",
-        "unique_id": MQTT_ENTITY_ID,
-        "command_topic": MQTT_COMMAND_TOPIC,
-        "state_topic": MQTT_STATE_TOPIC,
-        "availability_topic": MQTT_AVAILABLE_TOPIC,
-        "payload_available": "online",
-        "payload_not_available": "offline",
-        "schema": "json",
-        "supported_features": ["play", "pause", "next", "previous", "volume_set"],
-        "device": {
-            "identifiers": [MQTT_ENTITY_ID],
-            "manufacturer": "Self-Hosted Solutions",
-            "model": "MQTT Media Player v4",
-            "name": "MQTT Media Player"
-        }
+print(f"⚡ Please ensure that 'unique_id' in configuration.yaml matches: '{MEDIA_PLAYER_NAME}' for proper HA UI management.")
+
+MP3_PLAYER = "mpg123"
+MP3_PLAYER_OPTIONS = ["--mono", "--rate", "22050", "-v", "-o", "alsa", "--audiodevice", "plughw:1,0"]
+FFPLAY_COMMAND = "ffplay"
+FFPLAY_OPTIONS_STREAM = [FFPLAY_COMMAND, "-nodisp", "-autoexit", "-loglevel", "verbose", "-ac", "2", "-ar", "48000"]
+TEMP_AUDIO_PATH = "/tmp/tts_stream"
+
+SUPPORTED_CONTENT_TYPES = ["music", "audio/mp3", "audio/wav"]
+HA_BASE_URL = os.getenv("HA_BASE_URL", "http://homeassistanttest.local:8123")
+
+current_playing = ""
+current_volume = 50
+current_state = "idle"
+current_process = None
+
+def publish_state(client, state, now_playing=None):
+    payload = {
+        "state": state,
+        "now_playing": now_playing or current_playing,
+        "volume": current_volume
     }
+    client.publish(MQTT_TOPIC_STATE, json.dumps(payload))
+    _LOGGER.debug(f"📡 State updated to: {payload}")
+
+def publish_now_playing(client, now_playing):
+    client.publish(MQTT_TOPIC_NOW_PLAYING, json.dumps({"now_playing": now_playing}))
+    _LOGGER.debug(f"🎵 Now playing: {now_playing}")
+
+def handle_volume(client, volume_level):
+    global current_volume
+    current_volume = max(0, min(100, int(volume_level)))
+    subprocess.call(["amixer", "set", "Playback", f"{current_volume}%"])
+    _LOGGER.debug(f"🔊 Volume set to: {current_volume}%")
+    client.publish(MQTT_TOPIC_VOLUME, json.dumps({"volume": current_volume}))
+
+def stop_playback():
+    global current_process, current_state
+    if current_process and current_process.poll() is None:
+        current_process.terminate()
+        _LOGGER.debug("⏹️ Playback stopped.")
+    current_state = "idle"
+
+def pause_playback():
+    global current_process, current_state
+    if current_process and current_process.poll() is None:
+        current_process.send_signal(signal.SIGSTOP)
+        _LOGGER.debug("⏸️ Playback paused.")
+        current_state = "paused"
+
+def resume_playback():
+    global current_process, current_state
+    if current_process and current_process.poll() is None:
+        current_process.send_signal(signal.SIGCONT)
+        _LOGGER.debug("▶️ Playback resumed.")
+        current_state = "playing"
+
+def play_audio(filepath, media_type, client):
+    global current_playing, current_process
+    current_playing = filepath
+    publish_now_playing(client, filepath)
+    publish_state(client, "playing")
+    _LOGGER.debug(f"🔊 Playing file: {filepath}")
     try:
-        client.publish(MQTT_DISCOVERY_TOPIC, json.dumps(discovery_payload), retain=True)
-        logging.info("✅ Published updated MQTT discovery payload.")
+        current_process = subprocess.Popen([MP3_PLAYER] + MP3_PLAYER_OPTIONS + [filepath])
+        current_process.wait()
     except Exception as e:
-        logging.error(f"❌ Discovery payload error: {e}")
+        _LOGGER.error(f"❌ Playback error: {e}")
+    finally:
+        publish_state(client, "idle")
 
-def play_audio_file(client, filepath):
-    """Play a specified audio file using aplay and update state accordingly."""
+def stream_audio(stream_url, media_type, client):
+    global current_playing, current_process
+    current_playing = stream_url
+    publish_now_playing(client, stream_url)
+    publish_state(client, "playing")
+    command = FFPLAY_OPTIONS_STREAM + [stream_url]
+    _LOGGER.debug(f"📝 Streaming command: {command}")
     try:
-        command = f"aplay -D {AUDIO_DEVICE} {filepath}"
-        logging.info(f"🔊 Playing audio file: {filepath}")
-        publish_state(client, "playing")
-        result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode == 0:
-            logging.info("✅ Audio file playback complete.")
-            publish_state(client, "idle")
-        else:
-            logging.error(f"❌ Playback error: {result.stderr.decode().strip()}")
-            publish_state(client, "error")
+        current_process = subprocess.Popen(command)
+        current_process.wait()
     except Exception as e:
-        logging.error(f"❌ File playback error: {e}")
-        publish_state(client, "error")
-
-def download_and_play_audio(client, url):
-    """Download TTS audio from URL and play it using aplay."""
-    try:
-        logging.info(f"🌐 Downloading TTS audio from URL: {url}")
-        publish_state(client, "playing")
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()
-            with open(TTS_TEMP_FILE, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-        play_audio_file(client, TTS_TEMP_FILE)
-    except Exception as e:
-        logging.error(f"❌ TTS streaming or playback error: {e}")
-        publish_state(client, "error")
-
-def handle_mqtt_command(client, command):
-    """Process MQTT media player commands and handle TTS playback using 'play' action."""
-    try:
-        cmd = json.loads(command)
-        action = cmd.get("command", "")
-        logging.info(f"🎬 Action received: {action}")
-
-        if action == "play":
-            # Workaround: Treat 'filepath' as TTS URL if provided
-            filepath_or_url = cmd.get("args", {}).get("filepath", DEFAULT_AUDIO_FILE)
-            if filepath_or_url.startswith("http"):
-                download_and_play_audio(client, filepath_or_url)
-            else:
-                play_audio_file(client, filepath_or_url)
-        elif action == "pause":
-            logging.info("⏸ Pause requested - no action defined for aplay, state set to paused.")
-            publish_state(client, "paused")
-        elif action == "next":
-            logging.info("⏭ Next requested - no playlist implemented.")
-            publish_state(client, "idle")
-        elif action == "previous":
-            logging.info("⏮ Previous requested - no playlist implemented.")
-            publish_state(client, "idle")
-        elif action == "volume_set":
-            volume = cmd.get("args", {}).get("volume", "50")
-            execute_command(client, f"amixer set 'Playback' {volume}%", "volume_set")
-        else:
-            logging.warning(f"⚠️ Unknown action: {action}")
-            publish_state(client, "error")
-    except json.JSONDecodeError as e:
-        logging.error(f"❌ JSON decode error: {e}")
-        publish_state(client, "error")
-    except Exception as e:
-        logging.error(f"❌ Command handling error: {e}")
-        publish_state(client, "error")
-
-def execute_command(client, command, state_after):
-    """Execute system commands for media control and publish updated state."""
-    try:
-        logging.debug(f"Executing: {command}")
-        subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        publish_state(client, state_after)
-    except subprocess.CalledProcessError as e:
-        logging.error(f"❌ Command error: {e.stderr.decode().strip()}")
-        publish_state(client, "error")
-
-def announce_client(client):
-    """Announce availability via MQTT."""
-    try:
-        client.publish(MQTT_AVAILABLE_TOPIC, "online", retain=True)
-        logging.info("📢 Media Player announced as available.")
-    except Exception as e:
-        logging.error(f"❌ Announcement error: {e}")
+        _LOGGER.error(f"❌ Streaming failed: {str(e)}")
+    finally:
+        publish_state(client, "idle")
 
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        logging.info("✅ Connected to MQTT broker at %s:%s.", MQTT_BROKER, MQTT_PORT)
-        announce_client(client)
-        publish_state(client, "idle")
-        client.subscribe(MQTT_COMMAND_TOPIC)
-        logging.info("📡 Subscribed to: %s", MQTT_COMMAND_TOPIC)
-        publish_discovery(client)
+        _LOGGER.info("✅ Connected to MQTT Broker!")
+        client.subscribe([(MQTT_TOPIC_COMMAND, 0), (MQTT_TOPIC_VOLUME, 0)])
     else:
-        logging.error(f"❌ Connection failed. Return code {rc}")
+        _LOGGER.error(f"❌ Failed to connect. Return code: {rc}")
 
 def on_message(client, userdata, msg):
-    logging.debug(f"📩 Received - Topic: {msg.topic}, Payload: {msg.payload.decode()}")
-    handle_mqtt_command(client, msg.payload.decode())
+    _LOGGER.debug(f"📨 Received MQTT message: {msg.topic} -> {msg.payload.decode()}")
+    try:
+        payload = json.loads(msg.payload.decode())
+        if msg.topic == MQTT_TOPIC_VOLUME:
+            handle_volume(client, payload.get("volume", current_volume))
+        elif msg.topic == MQTT_TOPIC_COMMAND:
+            command = payload.get("command")
+            if command == "play":
+                args = payload.get("args", {})
+                filepath = args.get("filepath")
+                media_type = args.get("media_type", "audio/mp3")
+                if filepath:
+                    if filepath.startswith("http"):
+                        stream_audio(filepath, media_type, client)
+                    else:
+                        play_audio(filepath, media_type, client)
+                else:
+                    _LOGGER.warning("⚠️ No filepath provided in payload.")
+            elif command == "pause":
+                pause_playback()
+                publish_state(client, "paused")
+            elif command == "resume":
+                resume_playback()
+                publish_state(client, "playing")
+            elif command == "stop":
+                stop_playback()
+                publish_state(client, "idle")
+    except json.JSONDecodeError as e:
+        _LOGGER.error(f"❌ Failed to decode JSON: {e}")
 
 def main():
-    logging.info("🚀 Starting Self-Hosted MQTT Media Player (v4.0.0)...")
-    client = mqtt.Client(client_id=MQTT_ENTITY_ID)
+    _LOGGER.info(f"🚀 Starting Soundhive MQTT Client (v{VERSION})...")
+    client = mqtt.Client(client_id=MEDIA_PLAYER_NAME, protocol=mqtt.MQTTv311)
     client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
     client.on_connect = on_connect
     client.on_message = on_message
-
-    try:
-        logging.info("🔌 Connecting to MQTT broker...")
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        logging.info("🟢 Running MQTT loop...")
-        client.loop_forever()
-    except Exception as e:
-        logging.error(f"❌ Startup error: {e}")
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    client.loop_forever()
 
 if __name__ == "__main__":
     main()
 
+# ✅ Version 1.2.1:
+# - Dynamic media player naming on first start with user prompt.
+# - MQTT topics now reflect unique media player name.
+# - Reminder displayed to update 'unique_id' in configuration.yaml accordingly.
+# - Supports multiple Soundhive media players on the same network.
