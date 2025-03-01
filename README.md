@@ -1,4 +1,4 @@
-# Soundhive
+# Soundhive mediaplayer
 Soundhive mediaplayer for Homeassistant
 
 1: Copy the soundhive integration folder to homeassistant.local/config/custom_components/soundhive_media_player
