@@ -28,10 +28,10 @@ SUPPORT_SOUNHIVE = (
     | SUPPORT_PLAY_MEDIA  # Added to support HA play_media service
 )
 
-HA_BASE_URL = "http://homeassistanttest.local:8123"
+HA_BASE_URL = "http://homeassistant.local:8123"
 HA_TOKEN = ""  # Replace with actual token or retrieve securely
 HEADERS = {
-    "Authorization": f"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkN2I3M2Q0NGIxZmE0ZWY1YmYxZTczMWM1YThjNGU0NSIsImlhdCI6MTc0MDU2OTEzMSwiZXhwIjoyMDU1OTI5MTMxfQ.Er-E-RT92XtVvC3cuRrhRZgtWvNw8AjKt98cVV-K0b4",
+    "Authorization": f"Bearer <HA_TOKEN>",
     "Content-Type": "application/json"
 }
 
