@@ -48,7 +48,7 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._name = name
         self._unique_id = unique_id
         self._state = STATE_IDLE
-        self._volume_level = 0.5
+        self._volume_level = 0.2
         self._media_title = None
         self._attr_supported_features = SUPPORT_SOUNHIVE
 
