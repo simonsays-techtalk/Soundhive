@@ -26,7 +26,7 @@ Please mind that this version uses Piper as TTS. I am working on a more flexible
 1. Copy `custom_components/soundhive` into your Home Assistant `custom_components` directory.
 2. Restart Home Assistant.
 3. Add the Soundhive integration and add your first Soundhive mediaplayer.
-4: Follow the instructions when add a player.
+4. Follow the instructions when add a player.
 
 🛠️ Troubleshooting
 - Client not connecting? Verify the auth token.
