@@ -13,6 +13,12 @@ Please mind that this version uses Piper as TTS. I am working on a more flexible
 
 *You must use Piper tts at the moment.
 ---
+## 🏗️ Installation on Raspberry Pi
+1. Install and update RPI
+2. Download the installer: wget https://github.com/simonsays-techtalk/Soundhive/blob/main/client/install.py
+3. Run the installer: python3 install.py
+4. In homeassistant, create a Long-lived access token
+5. Follow the installer instructions, on RPI Zero W, installation can take some time!
 
 ## 🏗️ Installation in Homeassistant
 
