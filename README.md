@@ -11,7 +11,7 @@ Please mind that this version uses Piper as TTS. I am working on a more flexible
 - 🎛️ **Simple UI Controls**: Play, Pause, Volume, Next, and Previous.
 - 🛠️ **Easy Setup**: use install.py to install the client.
 
-*You must use piper tts at the moment.
+*You must use Piper tts at the moment.
 ---
 
 ## 🏗️ Installation in Homeassistant
