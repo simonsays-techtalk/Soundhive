@@ -1,3 +1,4 @@
+#VERSION = "1.1.02"
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
