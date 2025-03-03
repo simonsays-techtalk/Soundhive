@@ -9,8 +9,8 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
-# Define a list of available TTS engines.
-TTS_ENGINES = ["tts.google_translate_en_com", "tts.piper", "tts.other_engine"]
+# Define available TTS engines.
+TTS_ENGINES = ["tts.google_translate_en_com", "tts.piper_2", "tts.another_engine"]
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Soundhive Media Player."""
@@ -43,8 +43,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _validate_input(self, data):
         """Validate the user input allows connection to Home Assistant API."""
-        # Dynamically detect the Home Assistant API endpoint.
-        ha_url = self.hass.config.api.base_url
+        # Dynamically retrieve the Home Assistant API endpoint.
+        ha_url = self.hass.config.api.url
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {data[CONF_TOKEN]}",
@@ -99,7 +99,7 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
 
     async def _validate_token(self, token):
         """Validate the updated token for options flow."""
-        ha_url = self.hass.config.api.base_url
+        ha_url = self.hass.config.api.url
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {token}",
