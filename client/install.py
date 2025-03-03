@@ -14,8 +14,8 @@ HOME_DIR = os.environ["HOME"]
 VENV_DIR = os.path.join(HOME_DIR, "venv", "soundhive")
 
 # Define repository directory structure.
-# The repository will be cloned into ~/Soundhive/soundhive_client
-REPO_DIR = os.path.join(HOME_DIR, "Soundhive", "soundhive_client")
+# The repository will be cloned into ~/Soundhive which now contains a "client" folder.
+REPO_DIR = os.path.join(HOME_DIR, "Soundhive")
 REPO_URL = "https://github.com/simonsays-techtalk/Soundhive.git"
 
 # Define systemd service file location.
@@ -72,7 +72,10 @@ def prompt_for_configuration():
     print("Soundhive Client Setup")
     ha_url = manual_input("Enter Home Assistant URL (e.g., http://192.168.1.100:8123): ").strip()
     auth_token = manual_input("Enter Home Assistant Auth Token: ").strip()
-    return {"ha_url": ha_url, "auth_token": auth_token}
+    tts_engine = manual_input("Enter TTS Engine (default: tts.google_translate_en_com): ").strip()
+    if not tts_engine:
+        tts_engine = "tts.google_translate_en_com"
+    return {"ha_url": ha_url, "auth_token": auth_token, "tts_engine": tts_engine}
 
 def write_config_file(config, filename=CONFIG_FILE):
     try:
@@ -102,6 +105,7 @@ Other Actions:
       {VENV_DIR}
   - Cloning the Soundhive repository from GitHub into:
       {REPO_DIR}
+      (Repository now contains "client" and "custom_component" folders)
   - (Optional) Installation of Respeaker mic2hat drivers via bash script
   - Creation and activation of a systemd service for Soundhive Client
 ---------------------------------------------------------
@@ -235,7 +239,7 @@ popd
 
 def clone_repository():
     if not os.path.exists(REPO_DIR):
-        print(f"Cloning Soundhive client from {REPO_URL} into {REPO_DIR} ...")
+        print(f"Cloning Soundhive repository from {REPO_URL} into {REPO_DIR} ...")
         try:
             parent_dir = os.path.dirname(REPO_DIR)
             if not os.path.exists(parent_dir):
@@ -254,8 +258,8 @@ def clone_repository():
 
 def create_systemd_service():
     user = os.getlogin()
-    # The repository structure is: REPO_DIR/soundhive_client/soundhive_client.py
-    working_dir = os.path.join(REPO_DIR, "soundhive_client")
+    # Now the client code is located in REPO_DIR/client
+    working_dir = os.path.join(REPO_DIR, "client")
     client_script = os.path.join(working_dir, "soundhive_client.py")
     # Ensure the client script is executable
     try:
@@ -305,11 +309,10 @@ def main():
     install_dependencies()
     install_respeaker_drivers_bash()  # Use the known-working bash script for drivers
     clone_repository()
-    # Copy the configuration file into the service's working directory.
-    service_working_dir = os.path.join(REPO_DIR, "soundhive_client")
-    dest_config_path = os.path.join(service_working_dir, "soundhive_config.json")
-    print(f"Copying configuration file to {dest_config_path} ...")
-    subprocess.run(["cp", CONFIG_FILE, dest_config_path], check=True)
+    # Copy the configuration file into the client folder so the client finds it.
+    client_config_dest = os.path.join(REPO_DIR, "client", "soundhive_config.json")
+    print(f"Copying configuration file to {client_config_dest} ...")
+    subprocess.run(["cp", CONFIG_FILE, client_config_dest], check=True)
     create_systemd_service()
     print("Soundhive Client setup is complete.")
 
