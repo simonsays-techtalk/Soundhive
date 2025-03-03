@@ -9,8 +9,17 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
-# Define available TTS engines.
+# Define a list of available TTS engines.
 TTS_ENGINES = ["tts.google_translate_en_com", "tts.piper_2", "tts.another_engine"]
+
+def get_ha_url(hass):
+    """Retrieve the Home Assistant URL from core configuration."""
+    if hasattr(hass.config, "internal_url") and hass.config.internal_url:
+        return hass.config.internal_url
+    elif hasattr(hass.config, "external_url") and hass.config.external_url:
+        return hass.config.external_url
+    else:
+        return "http://localhost:8123"
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Soundhive Media Player."""
@@ -23,13 +32,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            _LOGGER.debug("🔑 Received token for validation: %s", user_input.get(CONF_TOKEN, "None"))
+            _LOGGER.debug("Received token for validation: %s", user_input.get(CONF_TOKEN, "None"))
             valid = await self._validate_input(user_input)
             if valid:
                 return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
             else:
                 errors["base"] = "auth_failed"
-                _LOGGER.error("❌ Token validation failed for user input: %s", user_input)
+                _LOGGER.error("Token validation failed for user input: %s", user_input)
 
         return self.async_show_form(
             step_id="user",
@@ -43,24 +52,23 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _validate_input(self, data):
         """Validate the user input allows connection to Home Assistant API."""
-        # Dynamically retrieve the Home Assistant API endpoint.
-        ha_url = self.hass.config.api.url
+        ha_url = get_ha_url(self.hass)
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {data[CONF_TOKEN]}",
             "Content-Type": "application/json"
         }
 
-        _LOGGER.debug("🌐 Validating token at endpoint: %s", url)
+        _LOGGER.debug("Validating token at endpoint: %s", url)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
-                    _LOGGER.debug("📝 Token validation response status: %s", response.status)
+                    _LOGGER.debug("Token validation response status: %s", response.status)
                     if response.status != 200:
-                        _LOGGER.error("❌ Invalid token. Response: %s", await response.text())
+                        _LOGGER.error("Invalid token. Response: %s", await response.text())
                     return response.status == 200
         except Exception as e:
-            _LOGGER.error("🔥 Exception during token validation: %s", str(e))
+            _LOGGER.error("Exception during token validation: %s", str(e))
             return False
 
     @staticmethod
@@ -86,7 +94,7 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(title="", data=user_input)
             else:
                 errors["base"] = "auth_failed"
-                _LOGGER.error("❌ Token validation failed during options flow.")
+                _LOGGER.error("Token validation failed during options flow.")
 
         return self.async_show_form(
             step_id="init",
@@ -99,21 +107,21 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
 
     async def _validate_token(self, token):
         """Validate the updated token for options flow."""
-        ha_url = self.hass.config.api.url
+        ha_url = get_ha_url(self.hass)
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
 
-        _LOGGER.debug("🌐 Validating updated token at endpoint: %s", url)
+        _LOGGER.debug("Validating updated token at endpoint: %s", url)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
-                    _LOGGER.debug("📝 Updated token validation response status: %s", response.status)
+                    _LOGGER.debug("Updated token validation response status: %s", response.status)
                     if response.status != 200:
-                        _LOGGER.error("❌ Invalid updated token. Response: %s", await response.text())
+                        _LOGGER.error("Invalid updated token. Response: %s", await response.text())
                     return response.status == 200
         except Exception as e:
-            _LOGGER.error("🔥 Exception during updated token validation: %s", str(e))
+            _LOGGER.error("Exception during updated token validation: %s", str(e))
             return False
