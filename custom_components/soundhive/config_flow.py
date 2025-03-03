@@ -1,7 +1,3 @@
-# soundhive/config_flow.py
-# Soundhive: Configuration Flow with Fixed URL Resolution (Updated for homeassistanttest.local)
-# Version: 0.4.4 (Set Fixed URL to homeassistanttest.local)
-
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -11,6 +7,9 @@ import aiohttp
 import logging
 
 _LOGGER = logging.getLogger(__name__)
+
+# Define a list of available TTS engines.
+TTS_ENGINES = ["tts.google_translate_en_com", "tts.piper", "tts.other_engine"]
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Soundhive Media Player."""
@@ -33,19 +32,18 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME, default="Soundhive_mediaplayer"): str,
-                    vol.Required(CONF_TOKEN): str,
-                }
-            ),
+            data_schema=vol.Schema({
+                vol.Required(CONF_NAME, default="Soundhive_mediaplayer"): str,
+                vol.Required(CONF_TOKEN): str,
+                vol.Required("tts_engine", default="tts.google_translate_en_com"): vol.In(TTS_ENGINES),
+            }),
             errors=errors,
         )
 
     async def _validate_input(self, data):
         """Validate the user input allows connection to Home Assistant API."""
-        # 🌐 Fixed URL set to homeassistanttest.local
-        ha_url = "http://homeassistanttest.local:8123"
+        # Dynamically detect the Home Assistant API endpoint.
+        ha_url = self.hass.config.api.base_url
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {data[CONF_TOKEN]}",
@@ -91,17 +89,16 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_TOKEN, default=self.config_entry.data.get(CONF_TOKEN, "")): str,
-                }
-            ),
+            data_schema=vol.Schema({
+                vol.Required(CONF_TOKEN, default=self.config_entry.data.get(CONF_TOKEN, "")): str,
+                vol.Required("tts_engine", default=self.config_entry.data.get("tts_engine", "tts.google_translate_en_com")): vol.In(TTS_ENGINES),
+            }),
             errors=errors,
         )
 
     async def _validate_token(self, token):
         """Validate the updated token for options flow."""
-        ha_url = "http://homeassistanttest.local:8123"
+        ha_url = self.hass.config.api.base_url
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {token}",
@@ -119,9 +116,3 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         except Exception as e:
             _LOGGER.error("🔥 Exception during updated token validation: %s", str(e))
             return False
-
-# ✅ Version 0.4.4:
-# - Updated token validation to always use homeassistanttest.local for consistency.
-# - Removed dynamic URL resolution to match the current test environment.
-# - Retained enhanced debug logging for troubleshooting.
-
