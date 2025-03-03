@@ -8,7 +8,7 @@ import sys
 import vlc
 
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "1.1.01"
+VERSION = "1.1.02"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 
 # Set up logging
@@ -26,6 +26,7 @@ def load_config():
 config = load_config()
 HA_BASE_URL = config.get("ha_url")
 TOKEN = config.get("auth_token")
+TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")  # Default value
 
 WS_API_URL = f"{HA_BASE_URL}/api/websocket"
 REGISTER_ENTITY_API = f"{HA_BASE_URL}/api/states/{MEDIA_PLAYER_ENTITY}"
@@ -95,7 +96,7 @@ async def resolve_tts_url(session, media_content_id):
             async with session.post(
                 TTS_API_URL,
                 headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"},
-                json={"message": message, "platform": "tts.piper_2"}
+                json={"message": message, "platform": TTS_ENGINE}
             ) as resp:
                 if resp.status == 200:
                     response_json = await resp.json()
@@ -143,7 +144,7 @@ async def resume_media():
     global current_player, media_paused
     if current_player and media_paused:
         _LOGGER.info("▶️ Resuming media playback")
-        current_player.pause()  # VLC pause toggles playback.
+        current_player.pause()  # VLC's pause toggles playback.
         media_paused = False
         async with aiohttp.ClientSession() as session:
             await update_media_state(session, "playing")
