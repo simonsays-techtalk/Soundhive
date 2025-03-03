@@ -7,6 +7,7 @@ import venv
 import tempfile
 import stat
 
+VERSION = "1.1.02"
 # Define home directory.
 HOME_DIR = os.environ["HOME"]
 
