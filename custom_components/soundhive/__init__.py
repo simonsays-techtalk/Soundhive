@@ -1,6 +1,6 @@
 # soundhive/__init__.py
 # Soundhive: Component Initialization with Config Flow Support
-# Version: 0.4.1 (Updated to Use const.py for DOMAIN)
+# VERSION = "1.1.02" (Updated to Use const.py for DOMAIN)
 
 import logging
 from homeassistant.config_entries import ConfigEntry
