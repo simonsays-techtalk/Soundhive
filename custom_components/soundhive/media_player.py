@@ -1,5 +1,5 @@
 # soundhive_media_player/media_player.py
-# Soundhive Custom Component for Home Assistant: Version 2.1.0 (REST API Integration with TTS & Streaming Fixes)
+# Soundhive Custom Component for Home Assistant: Version 1.1.02 (REST API Integration with TTS & Streaming Fixes)
 # - Direct integration with Soundhive Client via REST API
 # - Supports TTS and media streaming
 # - Play/Pause/Stop/Resume/Volume control
