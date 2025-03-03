@@ -89,6 +89,9 @@ async def update_media_state(session, state, media_url=None, volume=None):
     await asyncio.sleep(1)
 
 async def resolve_tts_url(session, media_content_id):
+    # Reload configuration on every call
+    config = load_config()
+    tts_engine = config.get("tts_engine", "tts.google_translate_en_com")
     if media_content_id.startswith("media-source://tts/"):
         try:
             message_param = media_content_id.split("message=")[1].split("&")[0]
@@ -96,7 +99,7 @@ async def resolve_tts_url(session, media_content_id):
             async with session.post(
                 TTS_API_URL,
                 headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"},
-                json={"message": message, "platform": TTS_ENGINE}
+                json={"message": message, "platform": tts_engine}
             ) as resp:
                 if resp.status == 200:
                     response_json = await resp.json()
