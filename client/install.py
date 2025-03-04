@@ -7,7 +7,6 @@ import venv
 import tempfile
 import stat
 
-#VERSION = "1.1.02"
 # Define home directory.
 HOME_DIR = os.environ["HOME"]
 
@@ -15,11 +14,11 @@ HOME_DIR = os.environ["HOME"]
 VENV_DIR = os.path.join(HOME_DIR, "venv", "soundhive")
 
 # Define repository directory structure.
-# The repository will be cloned into ~/Soundhive which now contains a "client" folder.
+# The repository will be cloned into ~/Soundhive which now contains "client" and "custom_component" folders.
 REPO_DIR = os.path.join(HOME_DIR, "Soundhive")
 REPO_URL = "https://github.com/simonsays-techtalk/Soundhive.git"
 
-# Define systemd service file location.
+# Define systemd service file location for the Soundhive client.
 SERVICE_FILE_PATH = "/etc/systemd/system/soundhive.service"
 
 # Configuration file name (initially written in the current working directory).
@@ -109,6 +108,7 @@ Other Actions:
       (Repository now contains "client" and "custom_component" folders)
   - (Optional) Installation of Respeaker mic2hat drivers via bash script
   - Creation and activation of a systemd service for Soundhive Client
+  - If mic2hat drivers are installed, also installing a shutdown script and service.
 ---------------------------------------------------------
 """
     print(summary)
@@ -259,7 +259,7 @@ def clone_repository():
 
 def create_systemd_service():
     user = os.getlogin()
-    # Now the client code is located in REPO_DIR/client
+    # The client code is located in REPO_DIR/client
     working_dir = os.path.join(REPO_DIR, "client")
     client_script = os.path.join(working_dir, "soundhive_client.py")
     # Ensure the client script is executable
@@ -294,9 +294,48 @@ WantedBy=multi-user.target
         subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
         subprocess.run(["sudo", "systemctl", "enable", "soundhive.service"], check=True)
         subprocess.run(["sudo", "systemctl", "start", "soundhive.service"], check=True)
-        print("Systemd service created and started successfully.")
+        print("Soundhive Client service created and started successfully.")
     except Exception as e:
         print(f"Error creating systemd service: {e}")
+        sys.exit(1)
+
+def create_poweroff_service():
+    # Install the shutdown script and create a service for it.
+    poweroff_src = os.path.join(REPO_DIR, "client", "poweroff.py")
+    poweroff_dest = "/usr/local/bin/poweroff_pi.py"
+    print(f"Copying shutdown script from {poweroff_src} to {poweroff_dest} ...")
+    try:
+        subprocess.run(["sudo", "cp", poweroff_src, poweroff_dest], check=True)
+        subprocess.run(["sudo", "chmod", "+x", poweroff_dest], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error installing shutdown script: {e}")
+        sys.exit(1)
+    
+    poweroff_service_file = "/etc/systemd/system/poweroff_pi.service"
+    poweroff_service_content = f"""[Unit]
+Description=Shutdown Pi Button Service
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart={poweroff_dest}
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+"""
+    try:
+        print(f"Creating shutdown service file at {poweroff_service_file}...")
+        with open("poweroff_pi.service", "w") as f:
+            f.write(poweroff_service_content)
+        subprocess.run(["sudo", "cp", "poweroff_pi.service", poweroff_service_file], check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+        subprocess.run(["sudo", "systemctl", "enable", "poweroff_pi.service"], check=True)
+        subprocess.run(["sudo", "systemctl", "start", "poweroff_pi.service"], check=True)
+        print("Shutdown Pi Button service created and started successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error creating shutdown service: {e}")
         sys.exit(1)
 
 def main():
@@ -315,6 +354,12 @@ def main():
     print(f"Copying configuration file to {client_config_dest} ...")
     subprocess.run(["cp", CONFIG_FILE, client_config_dest], check=True)
     create_systemd_service()
+    
+    # If mic2hat drivers were installed, also install the shutdown service.
+    if os.path.exists(MIC2HAT_FLAG_FILE):
+        print("Mic2hat drivers detected, installing shutdown service...")
+        create_poweroff_service()
+    
     print("Soundhive Client setup is complete.")
 
 if __name__ == "__main__":
