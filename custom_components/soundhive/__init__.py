@@ -30,7 +30,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN].pop(entry.entry_id)
     return True
 
-# ✅ Version 0.4.1:
+# ✅ Version "1.1.02":
 # - Created const.py with DOMAIN definition.
 # - Updated __init__.py to import DOMAIN from const.py for consistency.
 # - This change ensures alignment with Home Assistant's best practices and resolves potential handler issues.
