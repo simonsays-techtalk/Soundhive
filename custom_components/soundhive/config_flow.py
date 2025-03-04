@@ -12,15 +12,6 @@ _LOGGER = logging.getLogger(__name__)
 # Define a list of available TTS engines.
 TTS_ENGINES = ["tts.google_translate_en_com", "tts.piper_2", "tts.another_engine"]
 
-def get_ha_url(hass):
-    """Retrieve the Home Assistant URL from core configuration."""
-    if hasattr(hass.config, "internal_url") and hass.config.internal_url:
-        return hass.config.internal_url
-    elif hasattr(hass.config, "external_url") and hass.config.external_url:
-        return hass.config.external_url
-    else:
-        return "http://localhost:8123"
-
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Soundhive Media Player."""
 
@@ -32,17 +23,18 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            _LOGGER.debug("Received token for validation: %s", user_input.get(CONF_TOKEN, "None"))
+            _LOGGER.debug("Received input for validation: %s", user_input)
             valid = await self._validate_input(user_input)
             if valid:
                 return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
             else:
                 errors["base"] = "auth_failed"
-                _LOGGER.error("Token validation failed for user input: %s", user_input)
+                _LOGGER.error("Token validation failed for input: %s", user_input)
 
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
+                vol.Required("ha_url", default="http://localhost:8123"): str,
                 vol.Required(CONF_NAME, default="Soundhive_mediaplayer"): str,
                 vol.Required(CONF_TOKEN): str,
                 vol.Required("tts_engine", default="tts.google_translate_en_com"): vol.In(TTS_ENGINES),
@@ -52,7 +44,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _validate_input(self, data):
         """Validate the user input allows connection to Home Assistant API."""
-        ha_url = get_ha_url(self.hass)
+        ha_url = data.get("ha_url", "http://localhost:8123")
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {data[CONF_TOKEN]}",
@@ -89,7 +81,9 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         errors = {}
 
         if user_input is not None:
-            valid = await self._validate_token(user_input[CONF_TOKEN])
+            valid = await self._validate_token(
+                user_input[CONF_TOKEN], user_input.get("ha_url")
+            )
             if valid:
                 return self.async_create_entry(title="", data=user_input)
             else:
@@ -99,15 +93,16 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
+                vol.Required("ha_url", default=self.config_entry.data.get("ha_url", "http://localhost:8123")): str,
                 vol.Required(CONF_TOKEN, default=self.config_entry.data.get(CONF_TOKEN, "")): str,
                 vol.Required("tts_engine", default=self.config_entry.data.get("tts_engine", "tts.google_translate_en_com")): vol.In(TTS_ENGINES),
             }),
             errors=errors,
         )
 
-    async def _validate_token(self, token):
+    async def _validate_token(self, token, ha_url):
         """Validate the updated token for options flow."""
-        ha_url = get_ha_url(self.hass)
+        ha_url = ha_url or "http://localhost:8123"
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {token}",
