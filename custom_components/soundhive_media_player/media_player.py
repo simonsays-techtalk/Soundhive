@@ -20,7 +20,8 @@ SUPPORT_SOUNHIVE = (
 async def async_setup_entry(hass, entry, async_add_entities):
     config = entry.data
     name = config.get("name", "Soundhive Media Player")
-    unique_id = config.get("unique_id", "soundhive_mediaplayer")
+    # Use a default unique id that matches the expected entity id.
+    unique_id = config.get("unique_id", "soundhive_media_player")
     ha_url = config.get("ha_url", "http://localhost:8123")
     tts_engine = config.get("tts_engine", "tts.google_translate_en_com")
     token = config.get(CONF_TOKEN)
