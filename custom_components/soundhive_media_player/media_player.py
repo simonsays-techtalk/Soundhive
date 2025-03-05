@@ -1,4 +1,4 @@
-# Soundhive Custom Component for Home Assistant: Version 1.1.03 (REST API Integration with TTS & Streaming Fixes)
+# Soundhive Custom Component for Home Assistant: Version 1.1.05 (REST API Integration with TTS & Streaming Fixes)
 import logging
 from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayerEntityFeature
 from homeassistant.const import STATE_IDLE, STATE_PLAYING, STATE_PAUSED, CONF_TOKEN
@@ -46,6 +46,14 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
             "Content-Type": "application/json"
         }
 
+    @property
+    def unique_id(self):
+        return self._unique_id
+
+    @property
+    def name(self):
+        return self._name
+        
     @property
     def name(self):
         return self._name
@@ -119,5 +127,3 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
                         _LOGGER.error(f"❌ Failed to send command {command}, status code: {response.status}")
         except Exception as e:
             _LOGGER.error(f"❌ Exception when sending command {command}: {e}")
-
-
