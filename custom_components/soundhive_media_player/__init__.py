@@ -1,5 +1,3 @@
-# soundhive/__init__.py
-# Soundhive: Component Initialization with Config Flow Support
 # VERSION = "1.1.02" (Updated to Use const.py for DOMAIN)
 
 import logging
