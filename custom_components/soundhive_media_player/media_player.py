@@ -125,9 +125,3 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
                         _LOGGER.error(f"❌ Failed to send command {command}, status code: {response.status}")
         except Exception as e:
             _LOGGER.error(f"❌ Exception when sending command {command}: {e}")
-
-# ✅ Version 2.1.0:
-# - Added SUPPORT_PLAY_MEDIA for full compatibility with HA TTS & media streaming
-# - Enhanced logging for play_media calls
-# - Switched to aiohttp for async HTTP requests
-# - Improved media type handling for broader HA compatibility
