@@ -1,4 +1,4 @@
-#VERSION = "1.1.02"
+#VERSION = "1.1.03"
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -9,8 +9,14 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
-# Define a list of available TTS engines.
-TTS_ENGINES = ["tts.google_translate_en_com", "tts.piper_2", "tts.another_engine"]
+def get_ha_url(hass):
+    """Retrieve the Home Assistant URL from core configuration."""
+    if hasattr(hass.config, "internal_url") and hass.config.internal_url:
+        return hass.config.internal_url
+    elif hasattr(hass.config, "external_url") and hass.config.external_url:
+        return hass.config.external_url
+    else:
+        return "http://localhost:8123"
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Soundhive Media Player."""
@@ -18,9 +24,23 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_PUSH
 
+    async def _get_tts_engines(self):
+        """Retrieve a sorted list of TTS engine entity_ids from Home Assistant."""
+        engines = {state.entity_id for state in self.hass.states.async_all() if state.entity_id.startswith("tts.")}
+        if not engines:
+            engines = {"tts.google_translate_en_com"}
+        return sorted(engines)
+
     async def async_step_user(self, user_input=None):
         """Handle the initial step of the config flow."""
         errors = {}
+        tts_engines = await self._get_tts_engines()
+        schema = vol.Schema({
+            vol.Required("ha_url", default="http://localhost:8123"): str,
+            vol.Required(CONF_NAME, default="Soundhive_mediaplayer"): str,
+            vol.Required(CONF_TOKEN): str,
+            vol.Required("tts_engine", default=tts_engines[0]): vol.In(tts_engines),
+        })
 
         if user_input is not None:
             _LOGGER.debug("Received input for validation: %s", user_input)
@@ -33,24 +53,18 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required("ha_url", default="http://localhost:8123"): str,
-                vol.Required(CONF_NAME, default="Soundhive_mediaplayer"): str,
-                vol.Required(CONF_TOKEN): str,
-                vol.Required("tts_engine", default="tts.google_translate_en_com"): vol.In(TTS_ENGINES),
-            }),
+            data_schema=schema,
             errors=errors,
         )
 
     async def _validate_input(self, data):
-        """Validate the user input allows connection to Home Assistant API."""
+        """Validate the user input by connecting to the Home Assistant API using the provided URL."""
         ha_url = data.get("ha_url", "http://localhost:8123")
         url = f"{ha_url}/api/config"
         headers = {
             "Authorization": f"Bearer {data[CONF_TOKEN]}",
             "Content-Type": "application/json"
         }
-
         _LOGGER.debug("Validating token at endpoint: %s", url)
         try:
             async with aiohttp.ClientSession() as session:
@@ -76,14 +90,24 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         """Initialize Soundhive options flow."""
         self.config_entry = config_entry
 
+    async def _get_tts_engines(self):
+        """Retrieve a sorted list of TTS engine entity_ids from Home Assistant."""
+        engines = {state.entity_id for state in self.hass.states.async_all() if state.entity_id.startswith("tts.")}
+        if not engines:
+            engines = {"tts.google_translate_en_com"}
+        return sorted(engines)
+
     async def async_step_init(self, user_input=None):
         """Manage the Soundhive options."""
         errors = {}
-
+        tts_engines = await self._get_tts_engines()
+        schema = vol.Schema({
+            vol.Required("ha_url", default=self.config_entry.data.get("ha_url", "http://localhost:8123")): str,
+            vol.Required(CONF_TOKEN, default=self.config_entry.data.get(CONF_TOKEN, "")): str,
+            vol.Required("tts_engine", default=self.config_entry.data.get("tts_engine", tts_engines[0])): vol.In(tts_engines),
+        })
         if user_input is not None:
-            valid = await self._validate_token(
-                user_input[CONF_TOKEN], user_input.get("ha_url")
-            )
+            valid = await self._validate_token(user_input[CONF_TOKEN], user_input.get("ha_url"))
             if valid:
                 return self.async_create_entry(title="", data=user_input)
             else:
@@ -92,11 +116,7 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({
-                vol.Required("ha_url", default=self.config_entry.data.get("ha_url", "http://localhost:8123")): str,
-                vol.Required(CONF_TOKEN, default=self.config_entry.data.get(CONF_TOKEN, "")): str,
-                vol.Required("tts_engine", default=self.config_entry.data.get("tts_engine", "tts.google_translate_en_com")): vol.In(TTS_ENGINES),
-            }),
+            data_schema=schema,
             errors=errors,
         )
 
@@ -108,7 +128,6 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-
         _LOGGER.debug("Validating updated token at endpoint: %s", url)
         try:
             async with aiohttp.ClientSession() as session:
@@ -120,3 +139,4 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         except Exception as e:
             _LOGGER.error("Exception during updated token validation: %s", str(e))
             return False
+
