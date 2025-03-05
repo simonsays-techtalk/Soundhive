@@ -1,4 +1,4 @@
-#VERSION = "1.1.03"
+#VERSION = "1.1.04"
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -82,13 +82,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry):
         return SoundhiveOptionsFlow(config_entry)
 
-
 class SoundhiveOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for Soundhive Media Player."""
 
     def __init__(self, config_entry):
-        """Initialize Soundhive options flow."""
-        self.config_entry = config_entry
+        # The base class already stores the config entry as self.config_entry.
+        pass
 
     async def _get_tts_engines(self):
         """Retrieve a sorted list of TTS engine entity_ids from Home Assistant."""
@@ -139,4 +138,5 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         except Exception as e:
             _LOGGER.error("Exception during updated token validation: %s", str(e))
             return False
+
 
