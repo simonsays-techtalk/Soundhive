@@ -1,50 +1,49 @@
-# Soundhive Custom Component for Home Assistant: Version 1.1.02 (REST API Integration with TTS & Streaming Fixes)
-
+# Soundhive Custom Component for Home Assistant: Version 1.1.03 (REST API Integration with TTS & Streaming Fixes)
 import logging
-from homeassistant.components.media_player import MediaPlayerEntity
-from homeassistant.components.media_player.const import (
-    SUPPORT_PLAY, SUPPORT_PAUSE, SUPPORT_STOP, SUPPORT_VOLUME_SET, SUPPORT_VOLUME_STEP,
-    SUPPORT_TURN_ON, SUPPORT_TURN_OFF, SUPPORT_PLAY_MEDIA
-)
-from homeassistant.const import STATE_IDLE, STATE_PLAYING, STATE_PAUSED
+from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayerEntityFeature
+from homeassistant.const import STATE_IDLE, STATE_PLAYING, STATE_PAUSED, CONF_TOKEN
 import aiohttp
 
 _LOGGER = logging.getLogger("custom_components.soundhive_media_player")
 
 SUPPORT_SOUNHIVE = (
-    SUPPORT_PLAY
-    | SUPPORT_PAUSE
-    | SUPPORT_STOP
-    | SUPPORT_VOLUME_SET
-    | SUPPORT_VOLUME_STEP
-    | SUPPORT_TURN_ON
-    | SUPPORT_TURN_OFF
-    | SUPPORT_PLAY_MEDIA  # Added to support HA play_media service
+    MediaPlayerEntityFeature.PLAY |
+    MediaPlayerEntityFeature.PAUSE |
+    MediaPlayerEntityFeature.STOP |
+    MediaPlayerEntityFeature.VOLUME_SET |
+    MediaPlayerEntityFeature.VOLUME_STEP |
+    MediaPlayerEntityFeature.TURN_ON |
+    MediaPlayerEntityFeature.TURN_OFF |
+    MediaPlayerEntityFeature.PLAY_MEDIA
 )
 
-HA_BASE_URL = "http://homeassistant.local:8123"
-HA_TOKEN = ""  # Replace with actual token or retrieve securely
-HEADERS = {
-    "Authorization": f"Bearer <HA_TOKEN>",
-    "Content-Type": "application/json"
-}
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the Soundhive media player platform."""
+async def async_setup_entry(hass, entry, async_add_entities):
+    config = entry.data
     name = config.get("name", "Soundhive Media Player")
-    unique_id = config.get("unique_id", "Soundhive_mediaplayer")
-    async_add_entities([SoundhiveMediaPlayer(name, unique_id)], True)
+    unique_id = config.get("unique_id", "soundhive_mediaplayer")
+    ha_url = config.get("ha_url", "http://localhost:8123")
+    tts_engine = config.get("tts_engine", "tts.google_translate_en_com")
+    token = config.get(CONF_TOKEN)
+    async_add_entities([SoundhiveMediaPlayer(name, unique_id, ha_url, tts_engine, token)])
 
 class SoundhiveMediaPlayer(MediaPlayerEntity):
-    """Representation of the Soundhive Media Player."""
-
-    def __init__(self, name, unique_id):
+    def __init__(self, name, unique_id, ha_url, tts_engine, token):
         self._name = name
         self._unique_id = unique_id
+        self._ha_url = ha_url  # URL from the config entry
+        self._tts_engine = tts_engine
+        self._token = token    # Token from the config entry
         self._state = STATE_IDLE
         self._volume_level = 0.2
         self._media_title = None
         self._attr_supported_features = SUPPORT_SOUNHIVE
+
+    def _headers(self):
+        """Build request headers with the stored token."""
+        return {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json"
+        }
 
     @property
     def name(self):
@@ -81,10 +80,10 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         if media_type in ["music", "audio/mp3", "audio/wav"]:
             await self._send_command("play", {"filepath": media_id})
         elif media_type == "tts":
-            # Ensure TTS uses the correct URL format
-            await self._send_command("tts", {"tts_url": media_id})
+            # Build a TTS URL that incorporates the selected engine from the config
+            tts_url = f"{self._ha_url}/api/tts_proxy/{self._tts_engine}?text={media_id}"
+            await self._send_command("tts", {"tts_url": tts_url})
         elif media_type == "url":
-            # For streaming services
             await self._send_command("stream", {"stream_url": media_id})
         else:
             _LOGGER.warning(f"⚠️ Unsupported media_type: {media_type}")
@@ -93,14 +92,14 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         """Fetch the latest state from the client."""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{HA_BASE_URL}/api/states/media_player.{self._unique_id}",
-                                       headers=HEADERS) as response:
+                async with session.get(f"{self._ha_url}/api/states/media_player.{self._unique_id}",
+                                         headers=self._headers()) as response:
                     if response.status == 200:
                         state_info = await response.json()
                         self._state = state_info.get("state", STATE_IDLE)
                         attributes = state_info.get("attributes", {})
                         self._media_title = attributes.get("now_playing")
-                        self._volume_level = attributes.get("volume", 50) / 100
+                        self._volume_level = attributes.get("volume", 20) / 100
         except Exception as e:
             _LOGGER.error(f"❌ Failed to update state: {e}")
 
@@ -111,11 +110,12 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
             payload["attributes"].update(args)
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{HA_BASE_URL}/api/states/media_player.{self._unique_id}",
-                                        headers=HEADERS, json=payload) as response:
+                async with session.post(f"{self._ha_url}/api/states/media_player.{self._unique_id}",
+                                        headers=self._headers(), json=payload) as response:
                     if response.status == 200:
                         _LOGGER.debug(f"📡 Command sent successfully: {command} with args {args}")
                     else:
                         _LOGGER.error(f"❌ Failed to send command {command}, status code: {response.status}")
         except Exception as e:
             _LOGGER.error(f"❌ Exception when sending command {command}: {e}")
+
