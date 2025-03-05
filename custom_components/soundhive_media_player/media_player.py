@@ -119,3 +119,4 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         except Exception as e:
             _LOGGER.error(f"❌ Exception when sending command {command}: {e}")
 
+
