@@ -1,4 +1,4 @@
-#VERSION = "1.1.04"
+#VERSION = "1.1.05"
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -37,7 +37,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         tts_engines = await self._get_tts_engines()
         schema = vol.Schema({
             vol.Required("ha_url", default="http://localhost:8123"): str,
-            vol.Required(CONF_NAME, default="Soundhive_mediaplayer"): str,
+            vol.Required(CONF_NAME, default="Soundhive Media Player"): str,
             vol.Required(CONF_TOKEN): str,
             vol.Required("tts_engine", default=tts_engines[0]): vol.In(tts_engines),
         })
@@ -101,23 +101,24 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         errors = {}
         tts_engines = await self._get_tts_engines()
         schema = vol.Schema({
-            vol.Required("ha_url", default=self.config_entry.data.get("ha_url", "http://localhost:8123")): str,
-            vol.Required(CONF_TOKEN, default=self.config_entry.data.get(CONF_TOKEN, "")): str,
-            vol.Required("tts_engine", default=self.config_entry.data.get("tts_engine", tts_engines[0])): vol.In(tts_engines),
+            vol.Required("ha_url", default=self.config_entry.options.get("ha_url", "http://localhost:8123")): str,
+            vol.Required(CONF_TOKEN, default=self.config_entry.options.get(CONF_TOKEN, "")): str,
+            vol.Required("tts_engine", default=self.config_entry.options.get("tts_engine", tts_engines[0])): vol.In(tts_engines),
         })
         if user_input is not None:
             valid = await self._validate_token(user_input[CONF_TOKEN], user_input.get("ha_url"))
             if valid:
+                _LOGGER.debug("Options flow returning tts_engine: %s", user_input.get("tts_engine"))
                 return self.async_create_entry(title="", data=user_input)
             else:
                 errors["base"] = "auth_failed"
                 _LOGGER.error("Token validation failed during options flow.")
-
         return self.async_show_form(
             step_id="init",
             data_schema=schema,
             errors=errors,
         )
+
 
     async def _validate_token(self, token, ha_url):
         """Validate the updated token for options flow."""
@@ -138,5 +139,4 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         except Exception as e:
             _LOGGER.error("Exception during updated token validation: %s", str(e))
             return False
-
 
