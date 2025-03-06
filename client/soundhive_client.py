@@ -8,7 +8,7 @@ import sys
 import vlc
 
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "1.1.02"
+VERSION = "1.1.05"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 
 # Set up logging
@@ -162,34 +162,32 @@ async def set_volume(level):
         await update_media_state(session, state, volume=level)
 
 async def process_event(event_data):
-    service_data = event_data.get("event", {}).get("data", {})
-    domain = service_data.get("domain")
-    service = service_data.get("service")
-    _LOGGER.info("Received service call: domain=%s, service=%s", domain, service)
-    if domain != "media_player":
-        _LOGGER.info("Ignoring service call from domain: %s", domain)
+    _LOGGER.info("Full event_data: %s", event_data)
+    # Process only state_changed events
+    if event_data.get("type") != "event":
         return
-    async with aiohttp.ClientSession() as session:
-        if service == "play_media":
-            media_content_id = service_data.get("service_data", {}).get("media_content_id")
-            resolved_url = await resolve_tts_url(session, media_content_id)
-            await play_media(resolved_url)
-        elif service == "media_play":
-            if current_player and media_paused:
-                await resume_media()
-            else:
-                media_content_id = service_data.get("service_data", {}).get("media_content_id")
-                resolved_url = await resolve_tts_url(session, media_content_id)
-                await play_media(resolved_url)
-        elif service == "media_stop":
-            await stop_media()
-        elif service == "volume_set":
-            volume_level = service_data.get("service_data", {}).get("volume_level", 0.5)
-            await set_volume(volume_level)
-        elif service == "media_pause":
-            await pause_media()
-        else:
-            _LOGGER.info("Unhandled service: %s", service)
+    event = event_data.get("event", {})
+    if event.get("event_type") != "state_changed":
+        return
+    new_state = event.get("data", {}).get("new_state", {})
+    attributes = new_state.get("attributes", {})
+    command = attributes.get("command")
+    
+    if command == "update_config":
+        new_tts_engine = attributes.get("tts_engine")
+        _LOGGER.info("Processing update_config command with new TTS engine: %s", new_tts_engine)
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                config_data = json.load(f)
+            config_data["tts_engine"] = new_tts_engine
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(config_data, f, indent=4)
+            _LOGGER.info("Client configuration updated with new TTS engine.")
+        except Exception as e:
+            _LOGGER.error("Failed to update client configuration file: %s", e)
+        # Optionally, add code here to restart or reinitialize settings.
+    else:
+        _LOGGER.debug("Ignoring state change with command: %s", command)
 
 async def listen_for_media_commands():
     async with aiohttp.ClientSession() as session:
@@ -197,7 +195,8 @@ async def listen_for_media_commands():
         async with session.ws_connect(WS_API_URL) as ws:
             await ws.send_json({"type": "auth", "access_token": TOKEN})
             await ws.receive_json()  # Auth response
-            await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "call_service"})
+            # Subscribe to state_changed events
+            await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)
