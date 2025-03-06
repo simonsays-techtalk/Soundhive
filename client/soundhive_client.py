@@ -32,7 +32,7 @@ WS_API_URL = f"{HA_BASE_URL}/api/websocket"
 REGISTER_ENTITY_API = f"{HA_BASE_URL}/api/states/{MEDIA_PLAYER_ENTITY}"
 TTS_API_URL = f"{HA_BASE_URL}/api/tts_get_url"
 
-# Create a global VLC instance forcing ALSA output (mic2hat should be set as default via ALSA config)
+# Create a global VLC instance forcing ALSA output
 vlc_instance = vlc.Instance('--aout=alsa')
 current_player = None
 media_paused = False
@@ -43,6 +43,7 @@ def get_volume_control_name():
 VOLUME_CONTROL = get_volume_control_name()
 _LOGGER.info("🔊 Using VLC for audio playback (ALSA forced)")
 
+# Define your media library for browsing
 MEDIA_LIBRARY = [
     {"title": "Song 1", "media_url": "http://example.com/song1.mp3"},
     {"title": "Song 2", "media_url": "http://example.com/song2.mp3"}
@@ -161,18 +162,15 @@ async def set_volume(level):
         state = "playing" if not media_paused else "paused"
         await update_media_state(session, state, volume=level)
 
-async def process_event(event_data):
-    _LOGGER.info("Full event_data: %s", event_data)
-    # Process only state_changed events
-    if event_data.get("type") != "event":
-        return
+async def process_state_changed_event(event_data):
+    # Process state_changed events for config updates
+    _LOGGER.info("Processing state_changed event: %s", event_data)
     event = event_data.get("event", {})
     if event.get("event_type") != "state_changed":
         return
     new_state = event.get("data", {}).get("new_state", {})
     attributes = new_state.get("attributes", {})
     command = attributes.get("command")
-    
     if command == "update_config":
         new_tts_engine = attributes.get("tts_engine")
         _LOGGER.info("Processing update_config command with new TTS engine: %s", new_tts_engine)
@@ -185,18 +183,57 @@ async def process_event(event_data):
             _LOGGER.info("Client configuration updated with new TTS engine.")
         except Exception as e:
             _LOGGER.error("Failed to update client configuration file: %s", e)
-        # Optionally, add code here to restart or reinitialize settings.
     else:
-        _LOGGER.debug("Ignoring state change with command: %s", command)
+        _LOGGER.debug("Ignoring state_changed event with command: %s", command)
 
-async def listen_for_media_commands():
+async def process_call_service_event(event_data):
+    # Process call_service events for media playback commands
+    _LOGGER.info("Processing call_service event: %s", event_data)
+    service_data = event_data.get("event", {}).get("data", {})
+    domain = service_data.get("domain")
+    service = service_data.get("service")
+    if domain != "media_player":
+        _LOGGER.info("Ignoring call_service event from domain: %s", domain)
+        return
+    async with aiohttp.ClientSession() as session:
+        if service in ["play_media", "media_play"]:
+            media_content_id = service_data.get("service_data", {}).get("media_content_id")
+            resolved_url = await resolve_tts_url(session, media_content_id)
+            await play_media(resolved_url)
+        elif service == "media_stop":
+            await stop_media()
+        elif service == "volume_set":
+            volume_level = service_data.get("service_data", {}).get("volume_level", 0.5)
+            await set_volume(volume_level)
+        elif service == "media_pause":
+            await pause_media()
+        elif service == "media_resume":
+            await resume_media()
+        else:
+            _LOGGER.info("Unhandled service: %s", service)
+
+async def process_event(event_data):
+    # Dispatch events based on event type
+    if event_data.get("type") != "event":
+        return
+    event_type = event_data.get("event", {}).get("event_type")
+    if event_type == "state_changed":
+        await process_state_changed_event(event_data)
+    elif event_type == "call_service":
+        await process_call_service_event(event_data)
+    else:
+        _LOGGER.debug("Received unsupported event type: %s", event_type)
+
+async def listen_for_events():
     async with aiohttp.ClientSession() as session:
         await register_media_player(session)
         async with session.ws_connect(WS_API_URL) as ws:
+            # Authenticate
             await ws.send_json({"type": "auth", "access_token": TOKEN})
             await ws.receive_json()  # Auth response
-            # Subscribe to state_changed events
+            # Subscribe to both event types
             await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
+            await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)
@@ -205,8 +242,8 @@ async def listen_for_media_commands():
                     _LOGGER.debug("Received non-text message: %s", msg)
 
 async def main():
-    _LOGGER.info("🚀 Soundhive Client v%s - TTS & Media (using VLC with ALSA)", VERSION)
-    await listen_for_media_commands()
+    _LOGGER.info("🚀 Soundhive Client v%s - Combined TTS, Media Playback & Config Update (using VLC with ALSA)", VERSION)
+    await listen_for_events()
 
 if __name__ == "__main__":
     asyncio.run(main())
