@@ -139,4 +139,3 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         except Exception as e:
             _LOGGER.error("Exception during updated token validation: %s", str(e))
             return False
-
