@@ -89,8 +89,10 @@ def write_config_file(config, filename=CONFIG_FILE):
 
 def print_install_summary():
     summary = f"""
-The following components will be installed/configured:
+This is the Soundhive mediaplayer installer for HomeAssistant
 ---------------------------------------------------------
+The following components will be installed/configured:
+
 Python Packages:
   - aiohttp
   - python-vlc
