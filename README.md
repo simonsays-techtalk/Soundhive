@@ -32,3 +32,6 @@ Please mind that this version uses Piper as TTS. I am working on a more flexible
 - Client not connecting? Verify the auth token.
 - Not appearing in HA? Restart Home Assistant and check logs, enable debug log if necessary.
 - No TTS? Make sure you have installed a TTS engine, like piper. Use tts.<your-tts-engine> as entity.
+
+# 📌 Security note: 
+- The master password is stored in plaintext in the service file. For a home usage scenario this may be acceptable, but be aware that anyone with sufficient privileges on the machine can read it.
