@@ -21,7 +21,7 @@ import re
 import base64
 from urllib.parse import urlparse, parse_qs, quote_plus  # Added quote_plus for URL encoding
 
-# Added cryptography imports for decryption of config.
+# Added imports for decryption.
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
@@ -29,7 +29,7 @@ from cryptography.fernet import Fernet
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "2.5.19 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "2.5.20 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2  # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50  # Maximum size for the STT priority queue
@@ -44,7 +44,7 @@ tts_finished_time = 0        # Timestamp when TTS playback finished
 last_tts_message = ""        # Initialize last TTS message (used for filtering)
 last_llm_command = ""        # Last command processed by the LLM
 
-# --- Load and Decrypt Config (Session-Based Caching) ---
+# --- Load Config and Decrypt ---
 def load_config():
     try:
         with open(CONFIG_FILE, "r") as f:
@@ -52,7 +52,6 @@ def load_config():
     except Exception as e:
         _LOGGER.error("Error loading configuration file: %s", e)
         sys.exit(1)
-    # Expect encrypted config to have "salt" and "data"
     try:
         salt_b64 = encrypted_config["salt"]
         encrypted_data = encrypted_config["data"]
@@ -60,8 +59,13 @@ def load_config():
     except KeyError as e:
         _LOGGER.error("Invalid config file format: missing key %s", e)
         sys.exit(1)
-    # Prompt the user once per session for the master password.
-    master_password = input("Enter master password to decrypt configuration: ").strip()
+    master_password = os.getenv("MASTER_PASS")
+    if not master_password:
+        try:
+            master_password = input("Enter master password to decrypt configuration: ").strip()
+        except EOFError:
+            _LOGGER.error("No interactive input available and MASTER_PASS not set.")
+            sys.exit(1)
     password_bytes = master_password.encode()
     kdf = PBKDF2HMAC(
          algorithm=hashes.SHA256(),
@@ -81,9 +85,7 @@ def load_config():
         _LOGGER.error("Failed to decrypt configuration: %s", e)
         sys.exit(1)
 
-# Load and cache the configuration (only once per session).
 config = load_config()
-
 HA_BASE_URL = config.get("ha_url")
 TOKEN = config.get("auth_token")
 TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
@@ -110,9 +112,6 @@ def normalize_text(text):
     return text.lower().translate(translator).strip()
 
 def keyword_in_text(text, keyword):
-    """
-    Checks if the keyword appears as a separate word in the text.
-    """
     pattern = r'\b' + re.escape(keyword.lower().strip()) + r'\b'
     return re.search(pattern, text) is not None
 
@@ -128,12 +127,9 @@ async def clear_stt_queue(queue_obj):
             break
 
 def normalize_tts_text(text):
-    """
-    Remove markdown formatting, such as asterisks, from the text.
-    """
     return re.sub(r'\*+', '', text)
 
-# VLC event callback to detect when media playback ends.
+# VLC event callback.
 def on_media_end(event):
     global tts_finished_time
     tts_finished_time = time.monotonic()
@@ -205,10 +201,9 @@ async def update_media_state(session, state, media_url=None, volume=None):
                 _LOGGER.error("❌ Failed to update media player state. Status: %s", resp.status)
     await asyncio.sleep(1)
 
-# --- TTS URL Resolution ---
 async def resolve_tts_url(session, media_content_id):
     global config, TTS_ENGINE
-    config = load_config()  # Config is already cached; this call reuses it if needed.
+    config = load_config()
     TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
     if media_content_id is None:
         _LOGGER.error("❌ Received a NoneType media_content_id. Cannot resolve TTS URL.")
@@ -232,12 +227,7 @@ async def resolve_tts_url(session, media_content_id):
             _LOGGER.error("❌ Error resolving TTS URL: %s", str(e))
     return media_content_id
 
-# --- LLM Integration ---
 async def process_llm_command(command_text):
-    """
-    Sends the command_text to the LLM endpoint (/api/generate) and streams the response.
-    Returns the full generated text.
-    """
     if not LLM_URI:
         _LOGGER.error("LLM endpoint not defined in configuration.")
         return None
@@ -268,7 +258,6 @@ async def process_llm_command(command_text):
         _LOGGER.error("Error calling LLM: %s", e)
         return None
 
-# --- Media Playback Functions ---
 async def play_media(media_url):
     global current_player, media_paused
     if media_url is None:
@@ -341,7 +330,6 @@ async def set_volume(level):
         state = "playing" if not media_paused else "paused"
         await update_media_state(session, state, volume=level)
 
-# --- Streaming STT Functions ---
 def stream_audio_chunks(chunk_duration=4, samplerate=16000, channels=1):
     audio_queue = queue.Queue()
 
@@ -394,7 +382,6 @@ async def stream_transcriptions(stt_uri, chunk_duration=4, samplerate=16000, cha
                 _LOGGER.error("Exception sending audio chunk: %s", e)
                 yield ""
 
-# --- Enhanced Inter-Thread Communication using PriorityQueue ---
 def stt_thread_func(main_loop, stt_priority_queue):
     async def stt_processor():
         async for transcription in stream_transcriptions(STT_URI, chunk_duration=4):
@@ -409,16 +396,13 @@ def stt_thread_func(main_loop, stt_priority_queue):
             norm_text = normalize_text(transcription_text)
             _LOGGER.info("Normalized transcription: %s", norm_text)
 
-            # Skip if media is playing.
             if current_player is not None and current_player.get_state() == vlc.State.Playing:
                 continue
 
-            # Skip blank or inaudible transcriptions.
             if not norm_text or norm_text in ["blankaudio", "silence", "inaudible"]:
                 _LOGGER.debug("Skipping blank transcription: '%s'", norm_text)
                 continue
 
-            # Determine priority.
             if (keyword_in_text(norm_text, WAKE_KEYWORD) or 
                 keyword_in_text(norm_text, SLEEP_KEYWORD) or 
                 keyword_in_text(norm_text, ALARM_KEYWORD) or 
@@ -427,7 +411,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
             else:
                 priority = 1
 
-            # Backpressure: Check queue size and drop non-urgent messages if full.
             current_queue_size = stt_priority_queue.qsize()
             if current_queue_size >= STT_QUEUE_MAXSIZE and priority > 0:
                 _LOGGER.warning("STT queue full (size=%s); dropping non-urgent message: %s", current_queue_size, norm_text)
@@ -442,7 +425,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
                 _LOGGER.error("Error pushing transcription to queue: %s", ex)
     asyncio.run(stt_processor())
 
-# --- Continuous STT Loop in Main Thread ---
 async def continuous_stt_loop(stt_priority_queue):
     global client_mode, last_active_time, last_tts_message, last_llm_command
     _LOGGER.info("Starting continuous STT loop (initially in PASSIVE mode).")
@@ -512,7 +494,6 @@ async def continuous_stt_loop(stt_priority_queue):
                     _LOGGER.info("Inactivity timeout (%.0f sec) reached during idle check (elapsed %.2f sec). Switching to PASSIVE mode.", ACTIVE_TIMEOUT, elapsed)
             await asyncio.sleep(0.1)
 
-# --- Event Processing Functions ---
 async def process_state_changed_event(event_data):
     _LOGGER.info("Processing state_changed event: %s", event_data)
     event = event_data.get("event", {})
@@ -611,19 +592,17 @@ async def log_client_mode():
         _LOGGER.info("Current client mode: %s", client_mode)
         await asyncio.sleep(5)
 
-# --- Graceful Shutdown ---
 shutdown_event = asyncio.Event()
 
 def shutdown_handler():
     _LOGGER.info("Shutdown signal received. Cancelling tasks...")
     shutdown_event.set()
 
-# --- Main ---
 async def main():
     global client_mode, last_active_time, stt_priority_queue
     client_mode = "passive"
     last_active_time = None
-    _LOGGER.info("🚀 Soundhive Client v%s - Combined TTS, Media Playback, STT, and LLM Integration with enhanced inter-thread communication", VERSION)
+    _LOGGER.info("🚀 Soundhive Client v%s - Combined TTS, Media Playback, STT, and LLM Integration", VERSION)
     async with aiohttp.ClientSession() as session:
         await register_media_player(session)
     stt_priority_queue = asyncio.PriorityQueue(maxsize=STT_QUEUE_MAXSIZE)
