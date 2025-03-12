@@ -6,8 +6,9 @@ import json
 import venv
 import tempfile
 import stat
+import platform
 
-#VERSION = "1.1.03"
+# VERSION = 2.5.18
 # Define home directory.
 HOME_DIR = os.environ["HOME"]
 
@@ -15,21 +16,19 @@ HOME_DIR = os.environ["HOME"]
 VENV_DIR = os.path.join(HOME_DIR, "venv", "soundhive")
 
 # Define repository directory structure.
-# The repository will be cloned into ~/Soundhive which now contains "client" and "custom_component" folders.
 REPO_DIR = os.path.join(HOME_DIR, "Soundhive")
 REPO_URL = "https://github.com/simonsays-techtalk/Soundhive.git"
 
 # Define systemd service file location for the Soundhive client.
 SERVICE_FILE_PATH = "/etc/systemd/system/soundhive.service"
 
-# Configuration file name (initially written in the current working directory).
+# Configuration file name.
 CONFIG_FILE = "soundhive_config.json"
 
 # Flag file to mark mic2hat installation.
 MIC2HAT_FLAG_FILE = ".mic2hat_installed"
 
 def auto_confirm(prompt):
-    # This function is used for prompts after mic2hat installation.
     if os.path.exists(MIC2HAT_FLAG_FILE):
         print(prompt + " y (auto-confirmed)")
         return "y"
@@ -37,11 +36,20 @@ def auto_confirm(prompt):
         return input(prompt)
 
 def manual_input(prompt):
-    # Always ask the user.
     return input(prompt)
 
+def detect_device_type():
+    # Use platform.machine() to detect CPU architecture.
+    machine = platform.machine().strip()
+    # Many Pi Zero/1 devices report armv6l.
+    if machine == "armv6l":
+        print("Detected device type: Pi Zero / Pi 1 (minimal install recommended).")
+        return "minimal"
+    else:
+        print("Detected device type: " + machine + " (full install recommended).")
+        return "full"
+
 def ensure_virtualenv():
-    # Check if we're running inside our dedicated virtual environment.
     if sys.prefix != VENV_DIR:
         print(f"No virtual environment detected. Creating one in '{VENV_DIR}' please wait...")
         try:
@@ -56,7 +64,7 @@ def ensure_virtualenv():
     else:
         print("Virtual environment detected. Using:", sys.executable)
 
-def prompt_for_configuration():
+def prompt_for_configuration(install_type):
     if os.path.exists(CONFIG_FILE):
         choice = manual_input(f"Detected previous configuration in '{CONFIG_FILE}'.\nWould you like to use the existing configuration? [y/n]: ").strip().lower()
         if choice == "y":
@@ -76,7 +84,63 @@ def prompt_for_configuration():
     tts_engine = manual_input("Enter TTS Engine (default: tts.google_translate_en_com): ").strip()
     if not tts_engine:
         tts_engine = "tts.google_translate_en_com"
-    return {"ha_url": ha_url, "auth_token": auth_token, "tts_engine": tts_engine}
+    alsa_device = manual_input("Enter ALSA device (default: dmix:CARD=seeed2micvoicec,DEV=0): ").strip()
+    if not alsa_device:
+        alsa_device = "dmix:CARD=seeed2micvoicec,DEV=0"
+    
+    # For a full install, ask for additional parameters.
+    if install_type == "full":
+        stt_uri = manual_input("Enter STT server URI (default: http://192.168.1.100:10900/inference): ").strip()
+        if not stt_uri:
+            stt_uri = "http://192.168.1.100/inference"
+        llm_uri = manual_input("Enter LLM server URI (default: http://192.168.1.100:11434/api/generate): ").strip()
+        if not llm_uri:
+            llm_uri = "http://192.168.1.100:11434/api/generate"
+        active_timeout = manual_input("Enter active timeout in seconds (default: 15): ").strip()
+        if not active_timeout:
+            active_timeout = 15
+        else:
+            try:
+                active_timeout = int(active_timeout)
+            except ValueError:
+                active_timeout = 15
+    else:
+        # For minimal install, skip STT and LLM.
+        stt_uri = ""
+        llm_uri = ""
+        active_timeout = 0
+
+    volume = manual_input("Enter default volume (0.0 to 1.0, default: 0.5): ").strip()
+    if not volume:
+        volume = 0.5
+    else:
+        try:
+            volume = float(volume)
+        except ValueError:
+            volume = 0.5
+
+    # Set a default rms_threshold (you may adjust as needed)
+    rms_threshold = "0.008"
+
+    # Build the configuration dictionary.
+    config = {
+        "ha_url": ha_url,
+        "auth_token": auth_token,
+        "tts_engine": tts_engine,
+        "alsa_device": alsa_device,
+        "stt_uri": stt_uri,
+        "stt_format": "wav",
+        "active_timeout": active_timeout,
+        "volume": volume,
+        "wake_keyword": "hey assistant",
+        "sleep_keyword": "goodbye",
+        "llm_uri": llm_uri,
+        "alarm_keyword": "alarm now",
+        "clear_alarm_keyword": "clear alarm",
+        "rms_threshold": rms_threshold,
+        "install_type": install_type
+    }
+    return config
 
 def write_config_file(config, filename=CONFIG_FILE):
     try:
@@ -87,21 +151,27 @@ def write_config_file(config, filename=CONFIG_FILE):
         print(f"Error writing config file: {e}")
         sys.exit(1)
 
-def print_install_summary():
+def print_install_summary(config):
     summary = f"""
-This is the Soundhive mediaplayer installer for HomeAssistant
----------------------------------------------------------
+    
+Installer version: 2.5.18 
+---------------------------------------------------------    
 The following components will be installed/configured:
-
+---------------------------------------------------------
+Installation Type: {config.get("install_type")}
+---------------------------------------------------------
 Python Packages:
   - aiohttp
   - python-vlc
+  - sounddevice
+  - soundfile
 
 System Packages:
   - git
   - ffmpeg
   - vlc
   - libvlc-dev
+  - portaudio19-dev
 
 Other Actions:
   - Creation of a dedicated virtual environment in:
@@ -109,9 +179,10 @@ Other Actions:
   - Cloning the Soundhive repository from GitHub into:
       {REPO_DIR}
       (Repository now contains "client" and "custom_component" folders)
-  - (Optional) Installation of Respeaker mic2hat drivers via bash script
+  - (Optional) Installation of Respeaker mic2hat drivers via bash script (for supported devices)
   - Creation and activation of a systemd service for Soundhive Client
-  - If mic2hat drivers are installed, also installing a shutdown script and service.
+  - If applicable, installation of a shutdown script and service.
+  - Configuration will be set to a {config.get("install_type")} install.
 ---------------------------------------------------------
 """
     print(summary)
@@ -119,11 +190,11 @@ Other Actions:
     if choice != "y":
         print("Installation cancelled.")
         sys.exit(0)
-
+        
 def install_dependencies():
     print("Installing required Python packages...")
     try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "aiohttp", "python-vlc"], check=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "aiohttp", "python-vlc", "sounddevice", "soundfile"], check=True)
         print("Python dependencies installed.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing Python dependencies: {e}")
@@ -132,15 +203,14 @@ def install_dependencies():
     print("Installing system packages...")
     try:
         subprocess.run(["sudo", "apt-get", "update"], check=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y", "git", "ffmpeg", "vlc", "libvlc-dev"], check=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "git", "ffmpeg", "vlc", "libvlc-dev", "portaudio19-dev"], check=True)
         print("System packages installed.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing system packages: {e}")
         sys.exit(1)
 
 def install_respeaker_drivers_bash():
-    """Install Respeaker drivers using the known-working bash script.
-    If the DKMS module already exists, skip installation."""
+    # As before: if the flag file exists, skip installation.
     if os.path.exists(MIC2HAT_FLAG_FILE):
         print("Respeaker drivers already installed, skipping installation.")
         return
@@ -262,16 +332,13 @@ def clone_repository():
 
 def create_systemd_service():
     user = os.getlogin()
-    # The client code is located in REPO_DIR/client
     working_dir = os.path.join(REPO_DIR, "client")
     client_script = os.path.join(working_dir, "soundhive_client.py")
-    # Ensure the client script is executable
     try:
         subprocess.run(["chmod", "+x", client_script], check=True)
     except subprocess.CalledProcessError as e:
         print(f"Error setting executable permission on {client_script}: {e}")
         sys.exit(1)
-    # Use the dedicated virtual environment's Python interpreter.
     venv_python = os.path.join(VENV_DIR, "bin", "python3")
     exec_command = f"{venv_python} {client_script}"
     service_content = f"""[Unit]
@@ -303,7 +370,6 @@ WantedBy=multi-user.target
         sys.exit(1)
 
 def create_poweroff_service():
-    # Install the shutdown script and create a service for it.
     poweroff_src = os.path.join(REPO_DIR, "client", "poweroff.py")
     poweroff_dest = "/usr/local/bin/poweroff_pi.py"
     print(f"Copying shutdown script from {poweroff_src} to {poweroff_dest} ...")
@@ -342,23 +408,21 @@ WantedBy=multi-user.target
         sys.exit(1)
 
 def main():
-    # Only show the install summary if running outside a virtual environment.
-    if sys.prefix == sys.base_prefix:
-        print_install_summary()
+    device_type = detect_device_type()  # Determine if minimal or full install.
+    print_install_summary({"install_type": device_type})
     ensure_virtualenv()
-    config = prompt_for_configuration()
-    # Write configuration to the current directory.
+    config = prompt_for_configuration(device_type)
     write_config_file(config)
     install_dependencies()
-    install_respeaker_drivers_bash()  # Use the known-working bash script for drivers
+    # For full install, we assume STT/LLM features are required.
+    if device_type == "full":
+        install_respeaker_drivers_bash()
     clone_repository()
-    # Copy the configuration file into the client folder so the client finds it.
-    client_config_dest = os.path.join(REPO_DIR, "client", "soundhive_config.json")
+    client_config_dest = os.path.join(REPO_DIR, "client", CONFIG_FILE)
     print(f"Copying configuration file to {client_config_dest} ...")
     subprocess.run(["cp", CONFIG_FILE, client_config_dest], check=True)
     create_systemd_service()
     
-    # If mic2hat drivers were installed, also install the shutdown service.
     if os.path.exists(MIC2HAT_FLAG_FILE):
         print("Mic2hat drivers detected, installing shutdown service...")
         create_poweroff_service()
