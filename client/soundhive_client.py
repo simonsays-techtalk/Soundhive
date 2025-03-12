@@ -18,11 +18,18 @@ import signal
 import concurrent.futures
 import difflib
 import re
+import base64
 from urllib.parse import urlparse, parse_qs, quote_plus  # Added quote_plus for URL encoding
+
+# Added cryptography imports for decryption of config.
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+from cryptography.fernet import Fernet
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "2.5.18 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "2.5.19 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2  # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50  # Maximum size for the STT priority queue
@@ -37,18 +44,46 @@ tts_finished_time = 0        # Timestamp when TTS playback finished
 last_tts_message = ""        # Initialize last TTS message (used for filtering)
 last_llm_command = ""        # Last command processed by the LLM
 
-# --- Load Config and Set Variables ---
+# --- Load and Decrypt Config (Session-Based Caching) ---
 def load_config():
     try:
         with open(CONFIG_FILE, "r") as f:
-            config_data = json.load(f)
-            _LOGGER.info("🎚 Loaded config: %s", config_data)
-            return config_data
+            encrypted_config = json.load(f)
     except Exception as e:
         _LOGGER.error("Error loading configuration file: %s", e)
         sys.exit(1)
+    # Expect encrypted config to have "salt" and "data"
+    try:
+        salt_b64 = encrypted_config["salt"]
+        encrypted_data = encrypted_config["data"]
+        salt = base64.b64decode(salt_b64)
+    except KeyError as e:
+        _LOGGER.error("Invalid config file format: missing key %s", e)
+        sys.exit(1)
+    # Prompt the user once per session for the master password.
+    master_password = input("Enter master password to decrypt configuration: ").strip()
+    password_bytes = master_password.encode()
+    kdf = PBKDF2HMAC(
+         algorithm=hashes.SHA256(),
+         length=32,
+         salt=salt,
+         iterations=100000,
+         backend=default_backend()
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(password_bytes))
+    fernet = Fernet(key)
+    try:
+        decrypted_json = fernet.decrypt(encrypted_data.encode())
+        config_data = json.loads(decrypted_json.decode())
+        _LOGGER.info("Configuration decrypted and loaded successfully.")
+        return config_data
+    except Exception as e:
+        _LOGGER.error("Failed to decrypt configuration: %s", e)
+        sys.exit(1)
 
+# Load and cache the configuration (only once per session).
 config = load_config()
+
 HA_BASE_URL = config.get("ha_url")
 TOKEN = config.get("auth_token")
 TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
@@ -173,7 +208,7 @@ async def update_media_state(session, state, media_url=None, volume=None):
 # --- TTS URL Resolution ---
 async def resolve_tts_url(session, media_content_id):
     global config, TTS_ENGINE
-    config = load_config()
+    config = load_config()  # Config is already cached; this call reuses it if needed.
     TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
     if media_content_id is None:
         _LOGGER.error("❌ Received a NoneType media_content_id. Cannot resolve TTS URL.")
@@ -360,7 +395,6 @@ async def stream_transcriptions(stt_uri, chunk_duration=4, samplerate=16000, cha
                 yield ""
 
 # --- Enhanced Inter-Thread Communication using PriorityQueue ---
-# Here we check the current queue size before inserting.
 def stt_thread_func(main_loop, stt_priority_queue):
     async def stt_processor():
         async for transcription in stream_transcriptions(STT_URI, chunk_duration=4):
