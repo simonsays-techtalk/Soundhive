@@ -9,7 +9,7 @@ Please mind that this version uses Piper as TTS and a wyoming.cpp for STT. The c
 - 🔊 **Supports TTS & Media Playback**: Plays music, radio, and TTS announcements.
 - 🌍 **Lightweight** Optimized for Raspberry Pi Zero W and respeaker mic2hat.
 - 🎛️ **Simple UI Controls**: Play, Pause, Volume, Next, and Previous.
-- 🚀 **Detects hardware** type and adjusts installation automatically.
+- 🚀 **Detects hardware type**:adjusts installation automatically.
 - 🛠️ **Easy Setup**: use install.py to install the client.
 
 ---
