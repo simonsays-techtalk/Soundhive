@@ -1,4 +1,55 @@
 #!/usr/bin/env python3
+import sys, subprocess, os
+
+# Define home directory and dedicated virtual environment path.
+HOME_DIR = os.environ["HOME"]
+VENV_DIR = os.path.join(HOME_DIR, "venv", "soundhive")
+
+# Ensure the installer is running inside the dedicated virtual environment.
+if sys.prefix != VENV_DIR:
+    print(f"Not in virtual environment. Using dedicated venv at {VENV_DIR}")
+    if not os.path.exists(VENV_DIR):
+        print(f"Creating virtual environment in {VENV_DIR} ...")
+        subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
+        print("Virtual environment created.")
+    new_python = os.path.join(VENV_DIR, "bin", "python3")
+    print(f"Re-launching installer with {new_python} ...")
+    os.execv(new_python, [new_python] + sys.argv)
+
+# Now inside the dedicated virtual environment.
+# Ensure pip is available.
+try:
+    import pip
+except ModuleNotFoundError:
+    print("pip is not available. Bootstrapping pip using ensurepip...")
+    import ensurepip
+    ensurepip.bootstrap()
+
+# Pre-import dependency check.
+dependencies = {
+    "aiohttp": "aiohttp",
+    "python-vlc": "vlc",
+    "sounddevice": "sounddevice",
+    "soundfile": "soundfile",
+    "cryptography": "cryptography"
+}
+
+missing = []
+for pkg, mod in dependencies.items():
+    try:
+        __import__(mod)
+    except ModuleNotFoundError:
+        missing.append(pkg)
+
+if missing:
+    print("Missing packages detected:", missing)
+    for pkg in missing:
+        print(f"Installing {pkg}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+    print("Restarting installer after installing missing dependencies...")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+# Now import the rest of the modules.
 import os
 import sys
 import subprocess
@@ -7,25 +58,20 @@ import venv
 import tempfile
 import stat
 import platform
+import base64
 
-# VERSION = 2.5.18
-# Define home directory.
-HOME_DIR = os.environ["HOME"]
+# Added imports for encryption.
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+from cryptography.fernet import Fernet
 
-# Define the location for the dedicated virtual environment.
-VENV_DIR = os.path.join(HOME_DIR, "venv", "soundhive")
-
-# Define repository directory structure.
+# VERSION = 2.5.40
+# Define repository and configuration details.
 REPO_DIR = os.path.join(HOME_DIR, "Soundhive")
 REPO_URL = "https://github.com/simonsays-techtalk/Soundhive.git"
-
-# Define systemd service file location for the Soundhive client.
 SERVICE_FILE_PATH = "/etc/systemd/system/soundhive.service"
-
-# Configuration file name.
 CONFIG_FILE = "soundhive_config.json"
-
-# Flag file to mark mic2hat installation.
 MIC2HAT_FLAG_FILE = ".mic2hat_installed"
 
 def auto_confirm(prompt):
@@ -39,30 +85,13 @@ def manual_input(prompt):
     return input(prompt)
 
 def detect_device_type():
-    # Use platform.machine() to detect CPU architecture.
     machine = platform.machine().strip()
-    # Many Pi Zero/1 devices report armv6l.
     if machine == "armv6l":
         print("Detected device type: Pi Zero / Pi 1 (minimal install recommended).")
         return "minimal"
     else:
         print("Detected device type: " + machine + " (full install recommended).")
         return "full"
-
-def ensure_virtualenv():
-    if sys.prefix != VENV_DIR:
-        print(f"No virtual environment detected. Creating one in '{VENV_DIR}' please wait...")
-        try:
-            venv.create(VENV_DIR, with_pip=True)
-            print("Virtual environment created.")
-        except Exception as e:
-            print(f"Error creating virtual environment: {e}")
-            sys.exit(1)
-        new_python = os.path.join(VENV_DIR, "bin", "python3")
-        print(f"Re-launching script with {new_python} ...")
-        os.execv(new_python, [new_python] + sys.argv)
-    else:
-        print("Virtual environment detected. Using:", sys.executable)
 
 def prompt_for_configuration(install_type):
     if os.path.exists(CONFIG_FILE):
@@ -88,7 +117,6 @@ def prompt_for_configuration(install_type):
     if not alsa_device:
         alsa_device = "dmix:CARD=seeed2micvoicec,DEV=0"
     
-    # For a full install, ask for additional parameters.
     if install_type == "full":
         stt_uri = manual_input("Enter STT server URI (default: http://192.168.1.100:10900/inference): ").strip()
         if not stt_uri:
@@ -105,7 +133,6 @@ def prompt_for_configuration(install_type):
             except ValueError:
                 active_timeout = 15
     else:
-        # For minimal install, skip STT and LLM.
         stt_uri = ""
         llm_uri = ""
         active_timeout = 0
@@ -119,10 +146,7 @@ def prompt_for_configuration(install_type):
         except ValueError:
             volume = 0.5
 
-    # Set a default rms_threshold (you may adjust as needed)
     rms_threshold = "0.008"
-
-    # Build the configuration dictionary.
     config = {
         "ha_url": ha_url,
         "auth_token": auth_token,
@@ -142,19 +166,42 @@ def prompt_for_configuration(install_type):
     }
     return config
 
-def write_config_file(config, filename=CONFIG_FILE):
+def write_encrypted_config_file(config, filename=CONFIG_FILE):
+    master_password = manual_input("Enter a master password to secure your configuration: ").strip()
+    confirm_password = manual_input("Confirm master password: ").strip()
+    if master_password != confirm_password:
+        print("Passwords do not match. Exiting.")
+        sys.exit(1)
+    password_bytes = master_password.encode()
+    salt = os.urandom(16)
+    kdf = PBKDF2HMAC(
+         algorithm=hashes.SHA256(),
+         length=32,
+         salt=salt,
+         iterations=100000,
+         backend=default_backend()
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(password_bytes))
+    fernet = Fernet(key)
+    config_json = json.dumps(config, indent=4).encode()
+    encrypted_data = fernet.encrypt(config_json)
+    out_data = {
+         "salt": base64.b64encode(salt).decode('utf-8'),
+         "data": encrypted_data.decode('utf-8')
+    }
     try:
         with open(filename, "w") as f:
-            json.dump(config, f, indent=4)
-        print(f"Configuration saved to {filename}")
+            json.dump(out_data, f, indent=4)
+        print(f"Encrypted configuration saved to {filename}")
+        return master_password
     except Exception as e:
-        print(f"Error writing config file: {e}")
+        print(f"Error writing encrypted config file: {e}")
         sys.exit(1)
 
 def print_install_summary(config):
     summary = f"""
     
-Installer version: 2.5.18 
+Installer version: 2.5.20
 ---------------------------------------------------------    
 The following components will be installed/configured:
 ---------------------------------------------------------
@@ -165,6 +212,7 @@ Python Packages:
   - python-vlc
   - sounddevice
   - soundfile
+  - cryptography
 
 System Packages:
   - git
@@ -190,11 +238,12 @@ Other Actions:
     if choice != "y":
         print("Installation cancelled.")
         sys.exit(0)
-        
+
 def install_dependencies():
     print("Installing required Python packages...")
     try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "aiohttp", "python-vlc", "sounddevice", "soundfile"], check=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", 
+                        "aiohttp", "python-vlc", "sounddevice", "soundfile", "cryptography"], check=True)
         print("Python dependencies installed.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing Python dependencies: {e}")
@@ -203,14 +252,14 @@ def install_dependencies():
     print("Installing system packages...")
     try:
         subprocess.run(["sudo", "apt-get", "update"], check=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y", "git", "ffmpeg", "vlc", "libvlc-dev", "portaudio19-dev"], check=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", 
+                        "git", "ffmpeg", "vlc", "libvlc-dev", "portaudio19-dev"], check=True)
         print("System packages installed.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing system packages: {e}")
         sys.exit(1)
 
 def install_respeaker_drivers_bash():
-    # As before: if the flag file exists, skip installation.
     if os.path.exists(MIC2HAT_FLAG_FILE):
         print("Respeaker drivers already installed, skipping installation.")
         return
@@ -330,7 +379,7 @@ def clone_repository():
         except subprocess.CalledProcessError as e:
             print(f"Error updating repository: {e}")
 
-def create_systemd_service():
+def create_systemd_service(master_pass):
     user = os.getlogin()
     working_dir = os.path.join(REPO_DIR, "client")
     client_script = os.path.join(working_dir, "soundhive_client.py")
@@ -349,6 +398,7 @@ After=network.target
 Type=simple
 User={user}
 WorkingDirectory={working_dir}
+Environment="MASTER_PASS={master_pass}"
 ExecStart={exec_command}
 Restart=always
 RestartSec=10
@@ -410,18 +460,17 @@ WantedBy=multi-user.target
 def main():
     device_type = detect_device_type()  # Determine if minimal or full install.
     print_install_summary({"install_type": device_type})
-    ensure_virtualenv()
     config = prompt_for_configuration(device_type)
-    write_config_file(config)
+    # Write the encrypted configuration and capture the master password.
+    master_pass = write_encrypted_config_file(config)
     install_dependencies()
-    # For full install, we assume STT/LLM features are required.
     if device_type == "full":
         install_respeaker_drivers_bash()
     clone_repository()
     client_config_dest = os.path.join(REPO_DIR, "client", CONFIG_FILE)
     print(f"Copying configuration file to {client_config_dest} ...")
     subprocess.run(["cp", CONFIG_FILE, client_config_dest], check=True)
-    create_systemd_service()
+    create_systemd_service(master_pass)
     
     if os.path.exists(MIC2HAT_FLAG_FILE):
         print("Mic2hat drivers detected, installing shutdown service...")
