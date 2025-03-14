@@ -1,4 +1,4 @@
-# VERSION = "1.1.05" 
+# VERSION = "2.5.40" 
 import logging
 import aiohttp
 import voluptuous as vol
