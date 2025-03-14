@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 import sys, subprocess, os
+import json
+import venv
+import tempfile
+import stat
+import platform
+import base64
 
 # Define home directory and dedicated virtual environment path.
 HOME_DIR = os.environ["HOME"]
@@ -16,58 +22,7 @@ if sys.prefix != VENV_DIR:
     print(f"Re-launching installer with {new_python} ...")
     os.execv(new_python, [new_python] + sys.argv)
 
-# Now inside the dedicated virtual environment.
-# Ensure pip is available.
-try:
-    import pip
-except ModuleNotFoundError:
-    print("pip is not available. Bootstrapping pip using ensurepip...")
-    import ensurepip
-    ensurepip.bootstrap()
-
-# Pre-import dependency check.
-dependencies = {
-    "aiohttp": "aiohttp",
-    "python-vlc": "vlc",
-    "sounddevice": "sounddevice",
-    "soundfile": "soundfile",
-    "cryptography": "cryptography"
-}
-
-missing = []
-for pkg, mod in dependencies.items():
-    try:
-        __import__(mod)
-    except ModuleNotFoundError:
-        missing.append(pkg)
-
-if missing:
-    print("Missing packages detected:", missing)
-    for pkg in missing:
-        print(f"Installing {pkg}...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-    print("Restarting installer after installing missing dependencies...")
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-
-# Now import the rest of the modules.
-import os
-import sys
-import subprocess
-import json
-import venv
-import tempfile
-import stat
-import platform
-import base64
-
-# Added imports for encryption.
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.backends import default_backend
-from cryptography.fernet import Fernet
-
-# VERSION = 2.5.40
-# Define repository and configuration details.
+# Global configuration details.
 REPO_DIR = os.path.join(HOME_DIR, "Soundhive")
 REPO_URL = "https://github.com/simonsays-techtalk/Soundhive.git"
 SERVICE_FILE_PATH = "/etc/systemd/system/soundhive.service"
@@ -92,6 +47,41 @@ def detect_device_type():
     else:
         print("Detected device type: " + machine + " (full install recommended).")
         return "full"
+
+def print_pre_install_summary(install_type):
+    summary = f"""
+Installer version: 2.5.40
+---------------------------------------------------------
+The following components will be installed/configured:
+---------------------------------------------------------
+Installation Type: {install_type}
+---------------------------------------------------------
+Python Packages:
+  - aiohttp
+  - python-vlc
+  - sounddevice
+  - soundfile
+  - cryptography
+
+System Packages:
+  - git
+  - ffmpeg
+  - vlc
+  - libvlc-dev
+  - portaudio19-dev
+
+Other Actions:
+  - Creation of a dedicated virtual environment in:
+      {VENV_DIR}
+  - Cloning the Soundhive repository from GitHub into:
+      {REPO_DIR}
+      (Repository now contains "client" and "custom_component" folders)
+  - (Optional) Installation of Respeaker mic2hat drivers via bash script (for supported devices)
+  - Creation and activation of a systemd service for Soundhive Client
+  - If applicable, installation of a shutdown script and service.
+---------------------------------------------------------
+"""
+    print(summary)
 
 def prompt_for_configuration(install_type):
     if os.path.exists(CONFIG_FILE):
@@ -167,6 +157,12 @@ def prompt_for_configuration(install_type):
     return config
 
 def write_encrypted_config_file(config, filename=CONFIG_FILE):
+    # Import cryptography modules here to ensure they are installed first.
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.fernet import Fernet
+
     master_password = manual_input("Enter a master password to secure your configuration: ").strip()
     confirm_password = manual_input("Confirm master password: ").strip()
     if master_password != confirm_password:
@@ -198,57 +194,8 @@ def write_encrypted_config_file(config, filename=CONFIG_FILE):
         print(f"Error writing encrypted config file: {e}")
         sys.exit(1)
 
-def print_install_summary(config):
-    summary = f"""
-    
-Installer version: 2.5.20
----------------------------------------------------------    
-The following components will be installed/configured:
----------------------------------------------------------
-Installation Type: {config.get("install_type")}
----------------------------------------------------------
-Python Packages:
-  - aiohttp
-  - python-vlc
-  - sounddevice
-  - soundfile
-  - cryptography
-
-System Packages:
-  - git
-  - ffmpeg
-  - vlc
-  - libvlc-dev
-  - portaudio19-dev
-
-Other Actions:
-  - Creation of a dedicated virtual environment in:
-      {VENV_DIR}
-  - Cloning the Soundhive repository from GitHub into:
-      {REPO_DIR}
-      (Repository now contains "client" and "custom_component" folders)
-  - (Optional) Installation of Respeaker mic2hat drivers via bash script (for supported devices)
-  - Creation and activation of a systemd service for Soundhive Client
-  - If applicable, installation of a shutdown script and service.
-  - Configuration will be set to a {config.get("install_type")} install.
----------------------------------------------------------
-"""
-    print(summary)
-    choice = manual_input("Do you want to continue with the installation? [y/n]: ").strip().lower()
-    if choice != "y":
-        print("Installation cancelled.")
-        sys.exit(0)
-
 def install_dependencies():
-    print("Installing required Python packages...")
-    try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", 
-                        "aiohttp", "python-vlc", "sounddevice", "soundfile", "cryptography"], check=True)
-        print("Python dependencies installed.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error installing Python dependencies: {e}")
-        sys.exit(1)
-    
+    # First, install system packages (e.g., PortAudio) so that modules like sounddevice can import successfully.
     print("Installing system packages...")
     try:
         subprocess.run(["sudo", "apt-get", "update"], check=True)
@@ -257,6 +204,16 @@ def install_dependencies():
         print("System packages installed.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing system packages: {e}")
+        sys.exit(1)
+    
+    # Then, install required Python packages.
+    print("Installing required Python packages...")
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", 
+                        "aiohttp", "python-vlc", "sounddevice", "soundfile", "cryptography"], check=True)
+        print("Python dependencies installed.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error installing Python dependencies: {e}")
         sys.exit(1)
 
 def install_respeaker_drivers_bash():
@@ -458,20 +415,42 @@ WantedBy=multi-user.target
         sys.exit(1)
 
 def main():
-    device_type = detect_device_type()  # Determine if minimal or full install.
-    print_install_summary({"install_type": device_type})
-    config = prompt_for_configuration(device_type)
-    # Write the encrypted configuration and capture the master password.
-    master_pass = write_encrypted_config_file(config)
+    # Determine installation type early.
+    install_type = detect_device_type()
+    # Show a summary of components to be installed.
+    print_pre_install_summary(install_type)
+    
+    # Ask the user if they want to proceed with the installation.
+    proceed = input("Do you want to proceed with the installation? [y/n]: ").strip().lower()
+    if proceed != "y":
+        print("Installation cancelled.")
+        sys.exit(0)
+    
+    # Install system and Python dependencies.
     install_dependencies()
-    if device_type == "full":
-        install_respeaker_drivers_bash()
+    
+    # Verify that sounddevice can now be imported (i.e., PortAudio is available).
+    try:
+        import sounddevice
+    except Exception as e:
+        print("Error importing sounddevice even after installing dependencies:", e)
+        sys.exit(1)
+    
+    # Continue with the rest of the installation.
+    config = prompt_for_configuration(install_type)
+    master_pass = write_encrypted_config_file(config)
     clone_repository()
+    
+    # If a full install, ask whether to install the mic2hat drivers.
+    if install_type == "full":
+        install_respeaker_drivers_bash()
+    
     client_config_dest = os.path.join(REPO_DIR, "client", CONFIG_FILE)
     print(f"Copying configuration file to {client_config_dest} ...")
     subprocess.run(["cp", CONFIG_FILE, client_config_dest], check=True)
     create_systemd_service(master_pass)
     
+    # If mic2hat drivers are installed, set up the shutdown service.
     if os.path.exists(MIC2HAT_FLAG_FILE):
         print("Mic2hat drivers detected, installing shutdown service...")
         create_poweroff_service()
