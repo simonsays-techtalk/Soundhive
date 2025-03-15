@@ -1,4 +1,4 @@
-# VERSION = "2.5.51" 
+# VERSION = "2.5.52" 
 import logging
 import aiohttp
 import voluptuous as vol
@@ -6,11 +6,11 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayerEntityFeature
 from homeassistant.const import STATE_IDLE, CONF_TOKEN
 from homeassistant.helpers.entity_platform import async_get_current_platform
-from .const import DOMAIN 
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger("custom_components.soundhive_media_player")
 
-SUPPORT_SOUNHIVE = (
+SUPPORT_SOUNDHIVE = (
     MediaPlayerEntityFeature.PLAY |
     MediaPlayerEntityFeature.PAUSE |
     MediaPlayerEntityFeature.STOP |
@@ -41,9 +41,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
          "async_update_config",
     )
 
-from homeassistant.const import STATE_IDLE
-from .const import DOMAIN  # Ensure DOMAIN is imported from your const.py
-
 class SoundhiveMediaPlayer(MediaPlayerEntity):
     def __init__(self, name, unique_id, ha_url, tts_engine, token):
         self._name = name
@@ -54,7 +51,7 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._state = STATE_IDLE
         self._volume_level = 0.2
         self._media_title = None
-        self._attr_supported_features = SUPPORT_SOUNHIVE
+        self._attr_supported_features = SUPPORT_SOUNDHIVE
 
     def _headers(self):
         return {
@@ -90,28 +87,39 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
 
     async def async_set_volume_level(self, volume):
         self._volume_level = volume
-        await self._send_command("volume", {"volume_level": int(volume * 100)})
+        await self._send_command("volume", {"volume_level": volume})
+        self.async_write_ha_state()
 
     async def async_media_play(self):
+        self._state = "playing"
         await self._send_command("resume")
+        self.async_write_ha_state()
 
     async def async_media_pause(self):
+        self._state = "paused"
         await self._send_command("pause")
+        self.async_write_ha_state()
 
     async def async_media_stop(self):
+        self._state = STATE_IDLE
         await self._send_command("stop")
+        self.async_write_ha_state()
 
     async def async_play_media(self, media_type, media_id, **kwargs):
         _LOGGER.debug("async_play_media called with media_type: %s, media_id: %s", media_type, media_id)
         if media_type in ["music", "audio/mp3", "audio/wav"]:
+            self._state = "playing"
             await self._send_command("play", {"filepath": media_id})
         elif media_type == "tts":
+            self._state = "playing"
             tts_url = f"{self._ha_url}/api/tts_proxy/{self._tts_engine}?text={media_id}"
             await self._send_command("tts", {"tts_url": tts_url})
         elif media_type == "url":
+            self._state = "playing"
             await self._send_command("stream", {"stream_url": media_id})
         else:
             _LOGGER.warning("Unsupported media_type: %s", media_type)
+        self.async_write_ha_state()
 
     async def async_update(self):
         try:
@@ -125,7 +133,8 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
                         self._state = state_info.get("state", STATE_IDLE)
                         attributes = state_info.get("attributes", {})
                         self._media_title = attributes.get("now_playing")
-                        self._volume_level = attributes.get("volume", 20) / 100
+                        self._volume_level = attributes.get("volume_level", 0.2)
+                        self.async_write_ha_state()
         except Exception as e:
             _LOGGER.error("Failed to update state: %s", e)
 
@@ -142,7 +151,6 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
                 {"title": "Song 2", "media_url": "http://example.com/song2.mp3"}
             ]
         }
-        # Add the custom command and any extra arguments.
         base_attributes["command"] = command
         if args:
             base_attributes.update(args)
