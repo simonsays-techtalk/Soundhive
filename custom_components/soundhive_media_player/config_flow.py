@@ -1,4 +1,4 @@
-#VERSION = "2.5.51"
+# VERSION = "2.5.52"
 import voluptuous as vol
 import uuid
 from homeassistant import config_entries
@@ -9,6 +9,7 @@ import aiohttp
 import logging
 
 _LOGGER = logging.getLogger(__name__)
+
 
 def get_ha_url(hass):
     """Retrieve the Home Assistant URL from core configuration."""
@@ -25,7 +26,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_PUSH
 
     async def _get_tts_engines(self):
-        engines = {state.entity_id for state in self.hass.states.async_all() if state.entity_id.startswith("tts.")}
+        engines = {
+            state.entity_id
+            for state in self.hass.states.async_all()
+            if state.entity_id.startswith("tts.")
+        }
         if not engines:
             engines = {"tts.google_translate_en_com"}
         return sorted(engines)
@@ -41,10 +46,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         })
 
         if user_input is not None:
-            # Only generate a unique_id once when the entry is first created.
-            if "unique_id" not in user_input:
-                user_input["unique_id"] = uuid.uuid4().hex
-                _LOGGER.debug("Generated unique ID for integration: %s", user_input["unique_id"])
+            # Use the friendly name as the unique_id.
+            # Sanitize the name (e.g. lower case and replace spaces with underscores)
+            friendly_name = user_input[CONF_NAME].strip().lower().replace(" ", "_")
+            user_input["unique_id"] = friendly_name
+            _LOGGER.debug("Using unique ID based on friendly name: %s", user_input["unique_id"])
             _LOGGER.debug("Received input for validation: %s", user_input)
             valid = await self._validate_input(user_input)
             if valid:
@@ -58,7 +64,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=schema,
             errors=errors,
         )
-
 
     async def _validate_input(self, data):
         """Validate the user input by connecting to the Home Assistant API using the provided URL."""
@@ -85,16 +90,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry):
         return SoundhiveOptionsFlow(config_entry)
 
+
 class SoundhiveOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for Soundhive Media Player."""
 
     def __init__(self, config_entry):
         # The base class already stores the config entry as self.config_entry.
-        pass
+        self.config_entry = config_entry
 
     async def _get_tts_engines(self):
         """Retrieve a sorted list of TTS engine entity_ids from Home Assistant."""
-        engines = {state.entity_id for state in self.hass.states.async_all() if state.entity_id.startswith("tts.")}
+        engines = {
+            state.entity_id
+            for state in self.hass.states.async_all()
+            if state.entity_id.startswith("tts.")
+        }
         if not engines:
             engines = {"tts.google_translate_en_com"}
         return sorted(engines)
@@ -121,7 +131,6 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
             data_schema=schema,
             errors=errors,
         )
-
 
     async def _validate_token(self, token, ha_url):
         """Validate the updated token for options flow."""
