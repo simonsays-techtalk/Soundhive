@@ -1,7 +1,7 @@
 {
     "domain": "soundhive_media_player",
     "name": "Soundhive Media Player",
-    "version": "2.5.40", 
+    "version": "2.5.51", 
     "documentation": "https://github.com/simonsaystechtalk/soundhive",
     "config_flow": true,
     "dependencies": [],
