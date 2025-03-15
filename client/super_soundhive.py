@@ -29,7 +29,7 @@ from cryptography.fernet import Fernet
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "2.5.40 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "2.5.51 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
@@ -92,6 +92,11 @@ def load_config():
         sys.exit(1)
 
 config = load_config()
+# Ensure a unique ID is present for the client.
+if "unique_id" not in config:
+    import uuid
+    config["unique_id"] = uuid.uuid4().hex
+unique_id = config["unique_id"]
 HA_BASE_URL = config.get("ha_url")
 TOKEN = config.get("auth_token")
 TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
@@ -112,7 +117,7 @@ ACTIVE_TIMEOUT = config.get("active_timeout", 5)
 LLM_URI = config.get("llm_uri")  # LLM endpoint
 
 WS_API_URL = f"{HA_BASE_URL}/api/websocket"
-REGISTER_ENTITY_API = f"{HA_BASE_URL}/api/states/{MEDIA_PLAYER_ENTITY}"
+REGISTER_ENTITY_API = f"{HA_BASE_URL}/api/states/media_player.{unique_id}"
 TTS_API_URL = f"{HA_BASE_URL}/api/tts_get_url"
 
 # --- Helper Functions ---
@@ -153,6 +158,10 @@ MEDIA_LIBRARY = [
     {"title": "Song 1", "media_url": "http://example.com/song1.mp3"},
     {"title": "Song 2", "media_url": "http://example.com/song2.mp3"}
 ]
+
+
+# Build the registration API URL using the unique ID
+REGISTER_ENTITY_API = f"{HA_BASE_URL}/api/states/media_player.{unique_id}"
 
 # --- REST API Functions ---
 async def register_media_player(session):
@@ -203,6 +212,7 @@ async def update_media_state(session, state, media_url=None, volume=None):
             else:
                 _LOGGER.error("❌ Failed to update media player state. Status: %s", resp.status)
     await asyncio.sleep(1)
+
 
 async def resolve_tts_url(session, media_content_id):
     global config, TTS_ENGINE
