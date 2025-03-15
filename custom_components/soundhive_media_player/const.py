@@ -1,3 +1,3 @@
-# VVERSION = "2.5.51" (Initial Constants File)
+# VVERSION = "2.5.52" (Initial Constants File)
 
 DOMAIN = "soundhive_media_player"
