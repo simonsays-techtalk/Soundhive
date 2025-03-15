@@ -1,4 +1,4 @@
-# VERSION = "2.5.40" 
+# VERSION = "2.5.51" 
 import logging
 import aiohttp
 import voluptuous as vol
@@ -6,6 +6,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayerEntityFeature
 from homeassistant.const import STATE_IDLE, CONF_TOKEN
 from homeassistant.helpers.entity_platform import async_get_current_platform
+from .const import DOMAIN 
 
 _LOGGER = logging.getLogger("custom_components.soundhive_media_player")
 
@@ -23,7 +24,7 @@ SUPPORT_SOUNHIVE = (
 async def async_setup_entry(hass, entry, async_add_entities):
     config = entry.data
     name = config.get("name", "Soundhive Media Player")
-    unique_id = config.get("unique_id", "soundhive_media_player")
+    unique_id = config["unique_id"]
     ha_url = config.get("ha_url", "http://localhost:8123")
     tts_engine = config.get("tts_engine", "tts.google_translate_en_com")
     token = config.get(CONF_TOKEN)
@@ -39,6 +40,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
          {vol.Required("tts_engine"): cv.string},
          "async_update_config",
     )
+
+from homeassistant.const import STATE_IDLE
+from .const import DOMAIN  # Ensure DOMAIN is imported from your const.py
 
 class SoundhiveMediaPlayer(MediaPlayerEntity):
     def __init__(self, name, unique_id, ha_url, tts_engine, token):
@@ -73,6 +77,16 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
     @property
     def volume_level(self):
         return self._volume_level
+
+    @property
+    def device_info(self):
+        """Return device information for Home Assistant device registry."""
+        return {
+            "identifiers": {(DOMAIN, self._unique_id)},
+            "name": self._name,
+            "manufacturer": "Soundhive",
+            "model": "Soundhive Media Player",
+        }
 
     async def async_set_volume_level(self, volume):
         self._volume_level = volume
