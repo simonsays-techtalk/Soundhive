@@ -29,7 +29,7 @@ from cryptography.fernet import Fernet
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "2.5.51 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "2.5.52 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
