@@ -1,4 +1,5 @@
-# VERSION = "2.5.52" 
+# media_player.py
+# VERSION = "2.5.70"
 import logging
 import aiohttp
 import voluptuous as vol
@@ -22,27 +23,30 @@ SUPPORT_SOUNDHIVE = (
 )
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    config = entry.data
-    name = config.get("name", "Soundhive Media Player")
-    unique_id = config["unique_id"]
-    ha_url = config.get("ha_url", "http://localhost:8123")
-    tts_engine = config.get("tts_engine", "tts.google_translate_en_com")
-    token = config.get(CONF_TOKEN)
-    entity = SoundhiveMediaPlayer(name, unique_id, ha_url, tts_engine, token)
-    async_add_entities([entity])
-    # Store the entity reference keyed by entry.entry_id + "_entity"
-    hass.data.setdefault("soundhive_media_player", {})[entry.entry_id + "_entity"] = entity
+    """Set up Soundhive Media Player devices from config entry options."""
+    global_data = entry.data
+    devices = entry.options.get("devices", [])
+    entities = []
+    # Only create entities for devices that have been added.
+    for device in devices:
+        entity = SoundhiveMediaPlayer(
+            config_entry=entry,
+            name=device["name"],
+            unique_id=device["unique_id"],
+            ha_url=global_data.get("ha_url", "http://localhost:8123"),
+            tts_engine=device.get("tts_engine", global_data.get("default_tts_engine", "tts.google_translate_en_com")),
+            token=device["token"]
+        )
+        entities.append(entity)
+        hass.data.setdefault("soundhive_media_player", {})[
+            f"{entry.entry_id}_{device['unique_id']}"
+        ] = entity
 
-    # Register the custom service "update_config" on this platform.
-    platform = async_get_current_platform()
-    platform.async_register_entity_service(
-         "update_config",
-         {vol.Required("tts_engine"): cv.string},
-         "async_update_config",
-    )
+    async_add_entities(entities)
 
 class SoundhiveMediaPlayer(MediaPlayerEntity):
-    def __init__(self, name, unique_id, ha_url, tts_engine, token):
+    def __init__(self, config_entry, name, unique_id, ha_url, tts_engine, token):
+        self._config_entry = config_entry
         self._name = name
         self._unique_id = unique_id
         self._ha_url = ha_url
@@ -139,7 +143,6 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
             _LOGGER.error("Failed to update state: %s", e)
 
     async def _send_command(self, command, args=None):
-        # Build a full payload with required attributes.
         base_attributes = {
             "friendly_name": self._name,
             "supported_features": 52735,
@@ -172,4 +175,13 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
     async def async_update_config(self, tts_engine):
         _LOGGER.info("Updating client config with new TTS engine: %s", tts_engine)
         self._tts_engine = tts_engine
+        # Update the device configuration in the config entry options.
+        options = self._config_entry.options
+        devices = options.get("devices", [])
+        for device in devices:
+            if device["unique_id"] == self.unique_id:
+                device["tts_engine"] = tts_engine
+                break
+        new_options = {**options, "devices": devices}
+        self.hass.config_entries.async_update_entry(self._config_entry, options=new_options)
         await self._send_command("update_config", {"tts_engine": tts_engine})
