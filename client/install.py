@@ -50,7 +50,7 @@ def detect_device_type():
 
 def print_pre_install_summary(install_type):
     summary = f"""
-Installer version: 2.5.40
+Installer version: 2.5.70
 ---------------------------------------------------------
 The following components will be installed/configured:
 ---------------------------------------------------------
@@ -61,7 +61,6 @@ Python Packages:
   - python-vlc
   - sounddevice
   - soundfile
-  - cryptography
 
 System Packages:
   - git
@@ -75,7 +74,6 @@ Other Actions:
       {VENV_DIR}
   - Cloning the Soundhive repository from GitHub into:
       {REPO_DIR}
-      (Repository now contains "client" and "custom_component" folders)
   - (Optional) Installation of Respeaker mic2hat drivers via bash script (for supported devices)
   - Creation and activation of a systemd service for Soundhive Client
   - If applicable, installation of a shutdown script and service.
@@ -156,46 +154,16 @@ def prompt_for_configuration(install_type):
     }
     return config
 
-def write_encrypted_config_file(config, filename=CONFIG_FILE):
-    # Import cryptography modules here to ensure they are installed first.
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.fernet import Fernet
-
-    master_password = manual_input("Enter a master password to secure your configuration: ").strip()
-    confirm_password = manual_input("Confirm master password: ").strip()
-    if master_password != confirm_password:
-        print("Passwords do not match. Exiting.")
-        sys.exit(1)
-    password_bytes = master_password.encode()
-    salt = os.urandom(16)
-    kdf = PBKDF2HMAC(
-         algorithm=hashes.SHA256(),
-         length=32,
-         salt=salt,
-         iterations=100000,
-         backend=default_backend()
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(password_bytes))
-    fernet = Fernet(key)
-    config_json = json.dumps(config, indent=4).encode()
-    encrypted_data = fernet.encrypt(config_json)
-    out_data = {
-         "salt": base64.b64encode(salt).decode('utf-8'),
-         "data": encrypted_data.decode('utf-8')
-    }
+def write_config_file(config, filename=CONFIG_FILE):
     try:
         with open(filename, "w") as f:
-            json.dump(out_data, f, indent=4)
-        print(f"Encrypted configuration saved to {filename}")
-        return master_password
+            json.dump(config, f, indent=4)
+        print(f"Configuration saved to {filename}")
     except Exception as e:
-        print(f"Error writing encrypted config file: {e}")
+        print(f"Error writing config file: {e}")
         sys.exit(1)
 
 def install_dependencies():
-    # First, install system packages (e.g., PortAudio) so that modules like sounddevice can import successfully.
     print("Installing system packages...")
     try:
         subprocess.run(["sudo", "apt-get", "update"], check=True)
@@ -206,11 +174,10 @@ def install_dependencies():
         print(f"Error installing system packages: {e}")
         sys.exit(1)
     
-    # Then, install required Python packages.
     print("Installing required Python packages...")
     try:
         subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", 
-                        "aiohttp", "python-vlc", "sounddevice", "soundfile", "cryptography"], check=True)
+                        "aiohttp", "python-vlc", "sounddevice", "soundfile"], check=True)
         print("Python dependencies installed.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing Python dependencies: {e}")
@@ -227,33 +194,24 @@ def install_respeaker_drivers_bash():
 
     bash_script = r"""#!/usr/bin/env bash
 set -eo pipefail
-
 kernel_formatted="$(uname -r | cut -f1,2 -d.)"
 driver_url_status="$(curl -ILs https://github.com/HinTak/seeed-voicecard/archive/refs/heads/v$kernel_formatted.tar.gz | tac | grep -o "^HTTP.*" | cut -f2 -d' ' | head -1)"
-
 if [ ! "$driver_url_status" = 200 ]; then
   echo "Could not find driver for kernel $kernel_formatted"
   exit 1
 fi
-
 apt-get update
 apt-get install --no-install-recommends --yes \
     curl raspberrypi-kernel-headers dkms i2c-tools libasound2-plugins alsa-utils
-
 temp_dir="$(mktemp -d)"
-
 function finish {
    rm -rf "${temp_dir}"
 }
-
 trap finish EXIT
-
 pushd "${temp_dir}"
-
 echo 'Downloading source code'
 curl -L -o - "https://github.com/HinTak/seeed-voicecard/archive/refs/heads/v$kernel_formatted.tar.gz" | tar -xzf -
 cd seeed-voicecard-"$kernel_formatted"/
-
 echo 'Building kernel module'
 ver='0.3'
 mod='seeed-voicecard'
@@ -265,16 +223,13 @@ memory="$(LANG=C free -m|awk '/^Mem:/{print $2}')"
 if [ "${memory}" -le 512 ] && [ "${threads}" -gt 2 ]; then
   threads=2
 fi
-
 mkdir -p "/usr/src/${mod}-${ver}"
 cp -a "${src}"/* "/usr/src/${mod}-${ver}/"
 dkms add -m "${mod}" -v "${ver}"
 dkms build -k "${kernel}" -m "${mod}" -v "${ver}" -j "${threads}" && {
     dkms install --force -k "${kernel}" -m "${mod}" -v "${ver}"
 }
-
 mkdir -p "/var/lib/dkms/${mod}/${ver}/${marker}"
-
 echo 'Updating boot configuration'
 config='/boot/config.txt'
 cp seeed-*-voicecard.dtbo /boot/overlays
@@ -287,7 +242,6 @@ cp *.conf *.state /etc/voicecard
 cp seeed-voicecard /usr/bin/
 cp seeed-voicecard.service /lib/systemd/system/
 systemctl enable --now seeed-voicecard.service
-
 echo 'Done. Please reboot the system.'
 popd
 """
@@ -336,7 +290,7 @@ def clone_repository():
         except subprocess.CalledProcessError as e:
             print(f"Error updating repository: {e}")
 
-def create_systemd_service(master_pass):
+def create_systemd_service():
     user = os.getlogin()
     working_dir = os.path.join(REPO_DIR, "client")
     client_script = os.path.join(working_dir, "soundhive_client.py")
@@ -355,7 +309,6 @@ After=network.target
 Type=simple
 User={user}
 WorkingDirectory={working_dir}
-Environment="MASTER_PASS={master_pass}"
 ExecStart={exec_command}
 Restart=always
 RestartSec=10
@@ -415,42 +368,34 @@ WantedBy=multi-user.target
         sys.exit(1)
 
 def main():
-    # Determine installation type early.
     install_type = detect_device_type()
-    # Show a summary of components to be installed.
     print_pre_install_summary(install_type)
     
-    # Ask the user if they want to proceed with the installation.
     proceed = input("Do you want to proceed with the installation? [y/n]: ").strip().lower()
     if proceed != "y":
         print("Installation cancelled.")
         sys.exit(0)
     
-    # Install system and Python dependencies.
     install_dependencies()
     
-    # Verify that sounddevice can now be imported (i.e., PortAudio is available).
     try:
         import sounddevice
     except Exception as e:
         print("Error importing sounddevice even after installing dependencies:", e)
         sys.exit(1)
     
-    # Continue with the rest of the installation.
     config = prompt_for_configuration(install_type)
-    master_pass = write_encrypted_config_file(config)
+    write_config_file(config)
     clone_repository()
     
-    # If a full install, ask whether to install the mic2hat drivers.
     if install_type == "full":
         install_respeaker_drivers_bash()
     
     client_config_dest = os.path.join(REPO_DIR, "client", CONFIG_FILE)
     print(f"Copying configuration file to {client_config_dest} ...")
     subprocess.run(["cp", CONFIG_FILE, client_config_dest], check=True)
-    create_systemd_service(master_pass)
+    create_systemd_service()
     
-    # If mic2hat drivers are installed, set up the shutdown service.
     if os.path.exists(MIC2HAT_FLAG_FILE):
         print("Mic2hat drivers detected, installing shutdown service...")
         create_poweroff_service()
