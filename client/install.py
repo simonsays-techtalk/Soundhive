@@ -6,6 +6,7 @@ import tempfile
 import stat
 import platform
 import base64
+import uuid
 
 # Define home directory and dedicated virtual environment path.
 HOME_DIR = os.environ["HOME"]
@@ -82,6 +83,8 @@ Other Actions:
     print(summary)
 
 def prompt_for_configuration(install_type):
+    # Check for an existing config file.
+    config = {}
     if os.path.exists(CONFIG_FILE):
         choice = manual_input(f"Detected previous configuration in '{CONFIG_FILE}'.\nWould you like to use the existing configuration? [y/n]: ").strip().lower()
         if choice == "y":
@@ -89,7 +92,6 @@ def prompt_for_configuration(install_type):
                 with open(CONFIG_FILE, "r") as f:
                     config = json.load(f)
                 print("Using existing configuration.")
-                return config
             except Exception as e:
                 print(f"Error reading existing configuration: {e}")
                 sys.exit(1)
@@ -135,7 +137,13 @@ def prompt_for_configuration(install_type):
             volume = 0.5
 
     rms_threshold = "0.008"
-    config = {
+
+    # Generate and store a new unique_id if not present.
+    if "unique_id" not in config:
+        config["unique_id"] = str(uuid.uuid4())
+        print(f"Generated new unique_id: {config['unique_id']}")
+
+    config.update({
         "ha_url": ha_url,
         "auth_token": auth_token,
         "tts_engine": tts_engine,
@@ -151,7 +159,7 @@ def prompt_for_configuration(install_type):
         "clear_alarm_keyword": "clear alarm",
         "rms_threshold": rms_threshold,
         "install_type": install_type
-    }
+    })
     return config
 
 def write_config_file(config, filename=CONFIG_FILE):
