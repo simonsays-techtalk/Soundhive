@@ -21,15 +21,9 @@ import re
 import base64
 from urllib.parse import urlparse, parse_qs, quote_plus  # For URL encoding
 
-# Imports for decryption.
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.backends import default_backend
-from cryptography.fernet import Fernet
-
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "2.5.60 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "2.5.70 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
@@ -50,52 +44,20 @@ pending_learn = None            # Buffer (string) to accumulate learn command co
 pending_learn_timestamp = None  # Timestamp of the last pending learn update
 pending_learn_items = []        # List of learned facts pending commit
 
-# --- Load Config and Decrypt ---
+# --- Load Config (Plain JSON) ---
 def load_config():
     try:
         with open(CONFIG_FILE, "r") as f:
-            encrypted_config = json.load(f)
-    except Exception as e:
-        _LOGGER.error("Error loading configuration file: %s", e)
-        sys.exit(1)
-    try:
-        salt_b64 = encrypted_config["salt"]
-        encrypted_data = encrypted_config["data"]
-        salt = base64.b64decode(salt_b64)
-    except KeyError as e:
-        _LOGGER.error("Invalid config file format: missing key %s", e)
-        sys.exit(1)
-    master_password = os.getenv("MASTER_PASS")
-    if not master_password:
-        try:
-            master_password = input("Enter master password to decrypt configuration: ").strip()
-        except EOFError:
-            _LOGGER.error("No interactive input available and MASTER_PASS not set.")
-            sys.exit(1)
-    password_bytes = master_password.encode()
-    kdf = PBKDF2HMAC(
-         algorithm=hashes.SHA256(),
-         length=32,
-         salt=salt,
-         iterations=100000,
-         backend=default_backend()
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(password_bytes))
-    fernet = Fernet(key)
-    try:
-        decrypted_json = fernet.decrypt(encrypted_data.encode())
-        config_data = json.loads(decrypted_json.decode())
-        _LOGGER.info("Configuration decrypted and loaded successfully.")
+            config_data = json.load(f)
+        _LOGGER.info("Configuration loaded successfully.")
         return config_data
     except Exception as e:
-        _LOGGER.error("Failed to decrypt configuration: %s", e)
+        _LOGGER.error("Error loading configuration file: %s", e)
         sys.exit(1)
 
 config = load_config()
 # Ensure a unique ID is present for the client.
-config = load_config()
 if "unique_id" not in config:
-    # Use the friendly name as the unique_id, after sanitizing (e.g., lower case and replacing spaces with underscores)
     friendly_name = config.get("name", "soundhive_media_player").strip().lower().replace(" ", "_")
     config["unique_id"] = friendly_name
     with open(CONFIG_FILE, "w") as f:
@@ -164,7 +126,6 @@ MEDIA_LIBRARY = [
     {"title": "Song 2", "media_url": "http://example.com/song2.mp3"}
 ]
 
-# Build the registration API URL using the unique ID
 REGISTER_ENTITY_API = f"{HA_BASE_URL}/api/states/media_player.{unique_id}"
 
 # --- REST API Functions ---
@@ -243,61 +204,7 @@ async def resolve_tts_url(session, media_content_id):
             _LOGGER.error("❌ Error resolving TTS URL: %s", str(e))
     return media_content_id
 
-async def query_db_for_context(query_text):
-    """Query the Chromadb server for context to augment LLM prompts.
-       This function now combines results from the DB with any pending learn items."""
-    chromadb_url = config.get("chromadb_url")
-    payload = {"fact": query_text}  # Using key "fact" as expected by the server
-    db_context = ""
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(f"{chromadb_url}/retrieve", json=payload, headers={"Authorization": f"Bearer {TOKEN}"}) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    db_context = " ".join(result.get("facts", []))
-                    _LOGGER.info("DB context retrieved successfully.")
-                else:
-                    _LOGGER.error("DB query failed with status: %s", resp.status)
-        except Exception as e:
-            _LOGGER.error("Exception during DB query: %s", e)
-    # Combine DB context with pending learn items.
-    pending_context = " ".join(pending_learn_items) if pending_learn_items else ""
-    combined = db_context + " " + pending_context
-    return combined.strip()
-
-async def process_llm_command(command_text):
-    if not LLM_URI:
-        _LOGGER.error("LLM endpoint not defined in configuration.")
-        return None
-    context = await query_db_for_context(command_text)
-    combined_prompt = f"{context}\nUser query: {command_text}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            payload = {"model": "llama3.1:8b", "prompt": combined_prompt}
-            _LOGGER.info("Sending command to LLM: %s", command_text)
-            async with session.post(LLM_URI, json=payload) as resp:
-                if resp.status != 200:
-                    _LOGGER.error("LLM call failed with status: %s", resp.status)
-                    return None
-                full_response = ""
-                async for line in resp.content:
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line.decode('utf-8').strip())
-                    except Exception as e:
-                        _LOGGER.error("Error decoding streamed line: %s", e)
-                        continue
-                    token = chunk.get("response", "")
-                    full_response += token
-                    if chunk.get("done", False):
-                        break
-                _LOGGER.info("LLM full response: %s", full_response)
-                return full_response
-    except Exception as e:
-        _LOGGER.error("Error calling LLM: %s", e)
-        return None
-
+# --- Media Playback Functions ---
 async def play_media(media_url):
     global current_player, media_paused
     if media_url is None:
@@ -426,7 +333,7 @@ async def stream_transcriptions(stt_uri, chunk_duration=4, samplerate=16000, cha
 def stt_thread_func(main_loop, stt_priority_queue):
     async def stt_processor():
         global client_mode, last_active_time, last_tts_message, last_llm_command
-        global pending_learn, pending_learn_timestamp, pending_learn_items  # Ensure these are declared as global
+        global pending_learn, pending_learn_timestamp, pending_learn_items
         while True:
             try:
                 async for transcription in stream_transcriptions(STT_URI, chunk_duration=4):
@@ -437,20 +344,14 @@ def stt_thread_func(main_loop, stt_priority_queue):
                     except Exception as e:
                         _LOGGER.error("Error parsing STT transcription: %s", e)
                         transcription_text = transcription
-
                     _LOGGER.info("Raw transcription: %s", transcription_text)
                     norm_text = normalize_text(transcription_text)
                     _LOGGER.info("Normalized transcription: %s", norm_text)
-
-                    # Skip if media is playing.
                     if current_player is not None and current_player.get_state() == vlc.State.Playing:
                         continue
-
                     if not norm_text or norm_text in ["blankaudio", "silence", "indistinct chatter", "inaudible"]:
                         _LOGGER.debug("Skipping blank transcription: '%s'", norm_text)
                         continue
-
-                    # Buffer multi-utterance learn commands.
                     if pending_learn is not None:
                         if not (norm_text.startswith(normalize_text(LEARN_COMMAND).replace(":", "")) or
                                 norm_text.startswith(normalize_text(FORGET_COMMAND).replace(":", "")) or
@@ -468,8 +369,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
                                     _LOGGER.info("Buffered learn command stored locally: %s", pending_learn.strip())
                                 pending_learn = None
                                 pending_learn_timestamp = None
-
-                    # If in passive mode, check for wake keyword.
                     if client_mode == "passive":
                         if keyword_in_text(norm_text, WAKE_KEYWORD):
                             client_mode = "active"
@@ -478,13 +377,9 @@ def stt_thread_func(main_loop, stt_priority_queue):
                         else:
                             _LOGGER.info("Passive transcription (ignored): %s", transcription.strip())
                         continue
-
-                    # Additional check in active mode to ignore the wake word.
                     if client_mode == "active" and norm_text == WAKE_KEYWORD:
                         _LOGGER.info("Wake keyword received in active mode; ignoring.")
                         continue
-
-                    # New: Retrieve pending command.
                     if norm_text.startswith("retrieve pending"):
                         if pending_learn_items:
                             pending_text = " ; ".join(pending_learn_items)
@@ -500,9 +395,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
                         if resolved_url:
                             await play_media(resolved_url)
                         continue
-
-                    # Process special commands when active.
-                    # Learn command:
                     learn_prefix = normalize_text(LEARN_COMMAND).replace(":", "")
                     if norm_text.startswith(learn_prefix):
                         content = norm_text[len(learn_prefix):].strip(" :")
@@ -519,8 +411,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
                             pending_learn_items.append(content)
                             _LOGGER.info("Learn command stored pending commit: %s", content)
                             continue
-
-                    # Forget command:
                     forget_prefix = normalize_text(FORGET_COMMAND).replace(":", "")
                     if norm_text.startswith(forget_prefix):
                         forget_content = norm_text[len(forget_prefix):].strip(" :")
@@ -532,8 +422,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
                         else:
                             _LOGGER.error("Forget command received but no fact content was found.")
                         continue
-
-                    # Commit command:
                     if norm_text.startswith("commit changes:"):
                         commit_parts = transcription.split(":", 1)
                         if len(commit_parts) == 2 and commit_parts[1].strip() == COMMIT_CODE:
@@ -544,14 +432,10 @@ def stt_thread_func(main_loop, stt_priority_queue):
                         else:
                             _LOGGER.error("Commit code verification failed.")
                         continue
-
-                    # Sleep command:
                     if keyword_in_text(norm_text, SLEEP_KEYWORD):
                         client_mode = "passive"
                         _LOGGER.info("Sleep keyword detected: %r. Switching from ACTIVE to PASSIVE mode.", SLEEP_KEYWORD)
                         continue
-
-                    # Regular active command:
                     _LOGGER.info("Active transcription: %s", transcription.strip())
                     if norm_text != last_llm_command:
                         last_llm_command = norm_text
@@ -583,7 +467,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
 
 # --- Command Handlers ---
 async def handle_learn_command(content):
-    """Send a 'learn' command to the Chromadb server using the /append_log endpoint."""
     if not content.strip():
         _LOGGER.error("Empty fact provided; skipping learn command.")
         return
@@ -601,7 +484,6 @@ async def handle_learn_command(content):
             _LOGGER.error("Exception during learn command: %s", e)
 
 async def handle_forget_command(content):
-    """Send a 'forget' command to the Chromadb server."""
     payload = {"action": "forget", "content": content}
     chromadb_url = config.get("chromadb_url")
     _LOGGER.info("Sending forget command for content: %s", content)
@@ -616,7 +498,6 @@ async def handle_forget_command(content):
             _LOGGER.error("Exception during forget command: %s", e)
 
 async def handle_commit_command():
-    """Send a commit command to the Chromadb server."""
     payload = {"action": "commit"}
     chromadb_url = config.get("chromadb_url")
     _LOGGER.info("Sending commit command to DB.")
@@ -631,7 +512,6 @@ async def handle_commit_command():
             _LOGGER.error("Exception during commit command: %s", e)
 
 async def scheduled_commit(target_hour=2, target_minute=0):
-    """Schedule a commit at a specific time every day (default: 2:00 AM)."""
     while True:
         now = time.localtime()
         target = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, target_hour, target_minute, 0,
@@ -682,7 +562,12 @@ async def process_call_service_event(event_data):
     service_data = event_data.get("event", {}).get("data", {})
     domain = service_data.get("domain")
     service = service_data.get("service")
-    # Removed HA restart logic
+    if domain == "homeassistant" and service == "restart":
+        _LOGGER.info("Detected Home Assistant restart; waiting for HA to be ready before re-registering.")
+        await asyncio.sleep(10)
+        async with aiohttp.ClientSession() as session:
+            await register_media_player(session)
+        return
     if domain != "media_player":
         _LOGGER.info("Ignoring call_service event from domain: %s", domain)
         return
@@ -723,20 +608,35 @@ async def process_event(event_data):
         _LOGGER.debug("Received unsupported event type: %s", event_type)
 
 async def listen_for_events():
-    async with aiohttp.ClientSession() as session:
-        await register_media_player(session)
-        async with session.ws_connect(WS_API_URL) as ws:
-            await ws.send_json({"type": "auth", "access_token": TOKEN})
-            await ws.receive_json()
-            # Subscribe only to the events you need.
-            await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
-            await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    data = json.loads(msg.data)
-                    await process_event(data)
-                else:
-                    _LOGGER.debug("Received non-text message: %s", msg)
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                await register_media_player(session)
+                _LOGGER.info("Attempting to connect to HA WebSocket...")
+                async with session.ws_connect(WS_API_URL) as ws:
+                    initial_msg = await ws.receive_json()
+                    if initial_msg.get("type") == "auth_required":
+                        await ws.send_json({"type": "auth", "access_token": TOKEN})
+                        auth_response = await ws.receive_json()
+                        if auth_response.get("type") != "auth_ok":
+                            _LOGGER.error("WebSocket authentication failed: %s", auth_response)
+                            return
+                    else:
+                        _LOGGER.error("Unexpected initial message: %s", initial_msg)
+                        return
+                    await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
+                    await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
+                    _LOGGER.info("WebSocket connection established and subscribed to events.")
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            data = json.loads(msg.data)
+                            await process_event(data)
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            _LOGGER.error("WebSocket connection closed or error occurred. Reconnecting...")
+                            break
+        except Exception as e:
+            _LOGGER.error("Error in WebSocket connection: %s. Reconnecting...", e)
+        await asyncio.sleep(5)
 
 async def log_client_mode():
     while True:
@@ -776,7 +676,6 @@ async def main():
     executor.shutdown(wait=True)
     _LOGGER.info("Shutdown complete.")
 
-# --- Definition of continuous_stt_loop ---
 async def continuous_stt_loop(stt_priority_queue):
     global client_mode, last_active_time, last_tts_message, last_llm_command
     _LOGGER.info("Starting continuous STT loop (initially in PASSIVE mode).")
@@ -787,13 +686,11 @@ async def continuous_stt_loop(stt_priority_queue):
             _LOGGER.debug("Media is playing; skipping STT processing.")
             await asyncio.sleep(0.5)
             continue
-
         if time.monotonic() - tts_finished_time < COOLDOWN_PERIOD:
             remaining = COOLDOWN_PERIOD - (time.monotonic() - tts_finished_time)
             _LOGGER.debug("Within cooldown period (%.2f sec remaining); skipping STT processing.", remaining)
             await asyncio.sleep(0.5)
             continue
-
         try:
             priority, transcription = await asyncio.wait_for(stt_priority_queue.get(), timeout=0.5)
         except asyncio.TimeoutError:
@@ -806,16 +703,12 @@ async def continuous_stt_loop(stt_priority_queue):
                     _LOGGER.info("Inactivity timeout (%.0f sec) reached during idle check (elapsed %.2f sec). Switching to PASSIVE mode.", ACTIVE_TIMEOUT, elapsed)
             await asyncio.sleep(0.1)
             continue
-
         transcription_normalized = normalize_text(transcription).strip()
         current_time = time.monotonic()
         _LOGGER.debug("Received transcription: %r", transcription_normalized)
-
         if transcription_normalized == normalize_text(last_tts_message).strip():
             _LOGGER.debug("Transcription matches last TTS message; ignoring.")
             continue
-
-        # If there is a pending learn buffer, check if the current utterance should be appended.
         global pending_learn, pending_learn_timestamp
         if pending_learn is not None:
             if not (transcription_normalized.startswith(normalize_text(LEARN_COMMAND).replace(":", "")) or
@@ -834,7 +727,6 @@ async def continuous_stt_loop(stt_priority_queue):
                         _LOGGER.info("Buffered learn command stored locally: %s", pending_learn.strip())
                     pending_learn = None
                     pending_learn_timestamp = None
-
         if client_mode == "passive":
             if keyword_in_text(transcription_normalized, WAKE_KEYWORD):
                 client_mode = "active"
@@ -843,13 +735,9 @@ async def continuous_stt_loop(stt_priority_queue):
             else:
                 _LOGGER.info("Passive transcription (ignored): %s", transcription.strip())
             continue
-
-        # Additional check in active mode to ignore the wake word.
         if client_mode == "active" and transcription_normalized == WAKE_KEYWORD:
             _LOGGER.info("Wake keyword received in active mode; ignoring.")
             continue
-
-        # New: Retrieve pending command.
         if transcription_normalized.startswith("retrieve pending"):
             if pending_learn_items:
                 pending_text = " ; ".join(pending_learn_items)
@@ -865,9 +753,6 @@ async def continuous_stt_loop(stt_priority_queue):
             if resolved_url:
                 await play_media(resolved_url)
             continue
-
-        # Process special commands when active.
-        # Learn command:
         learn_prefix = normalize_text(LEARN_COMMAND).replace(":", "")
         if transcription_normalized.startswith(learn_prefix):
             content = transcription_normalized[len(learn_prefix):].strip(" :")
@@ -884,8 +769,6 @@ async def continuous_stt_loop(stt_priority_queue):
                 pending_learn_items.append(content)
                 _LOGGER.info("Learn command stored pending commit: %s", content)
                 continue
-
-        # Forget command:
         forget_prefix = normalize_text(FORGET_COMMAND).replace(":", "")
         if transcription_normalized.startswith(forget_prefix):
             forget_content = transcription_normalized[len(forget_prefix):].strip(" :")
@@ -897,8 +780,6 @@ async def continuous_stt_loop(stt_priority_queue):
             else:
                 _LOGGER.error("Forget command received but no fact content was found.")
             continue
-
-        # Commit command:
         if transcription_normalized.startswith("commit changes:"):
             commit_parts = transcription.split(":", 1)
             if len(commit_parts) == 2 and commit_parts[1].strip() == COMMIT_CODE:
@@ -909,14 +790,10 @@ async def continuous_stt_loop(stt_priority_queue):
             else:
                 _LOGGER.error("Commit code verification failed.")
             continue
-
-        # Sleep command:
         if keyword_in_text(transcription_normalized, SLEEP_KEYWORD):
             client_mode = "passive"
             _LOGGER.info("Sleep keyword detected: %r. Switching from ACTIVE to PASSIVE mode.", SLEEP_KEYWORD)
             continue
-
-        # Regular active command:
         _LOGGER.info("Active transcription: %s", transcription.strip())
         if transcription_normalized != last_llm_command:
             last_llm_command = transcription_normalized
@@ -935,7 +812,6 @@ async def continuous_stt_loop(stt_priority_queue):
             if elapsed > ACTIVE_TIMEOUT:
                 client_mode = "passive"
                 _LOGGER.info("Inactivity timeout (%.0f sec) reached (elapsed %.2f sec). Switching to PASSIVE mode.", ACTIVE_TIMEOUT, elapsed)
-
     asyncio.run(stt_processor())
 
 if __name__ == "__main__":
