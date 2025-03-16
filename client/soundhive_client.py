@@ -19,6 +19,7 @@ import concurrent.futures
 import difflib
 import re
 import base64
+import uuid                   # NEW: For UUID generation
 from urllib.parse import urlparse, parse_qs, quote_plus  # For URL encoding
 
 # --- Configuration and Global Constants ---
@@ -27,6 +28,7 @@ VERSION = "2.5.70 Media playback, TTS, and threaded streaming STT with enhanced 
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
+LEARN_BUFFER_TIMEOUT = 10     # NEW: Timeout in seconds for buffering learn commands
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO)
@@ -58,8 +60,7 @@ def load_config():
 config = load_config()
 # Ensure a unique ID is present for the client.
 if "unique_id" not in config:
-    friendly_name = config.get("name", "soundhive_media_player").strip().lower().replace(" ", "_")
-    config["unique_id"] = friendly_name
+    config["unique_id"] = str(uuid.uuid4())  # NEW: Generate a UUID
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=4)
 unique_id = config["unique_id"]
@@ -70,7 +71,7 @@ TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
 STT_URI = config.get("stt_uri")
 STT_FORMAT = config.get("stt_format", "wav")
 VOLUME_SETTING = config.get("volume", 0.2)
-RMS_THRESHOLD = float(config.get("rms_threshold", "0.001"))
+RMS_THRESHOLD = float(config.get("rms_threshold", "0.008"))
 
 # Keyword and Special Command settings
 WAKE_KEYWORD = config.get("wake_keyword", "hey assistant")
@@ -359,7 +360,7 @@ def stt_thread_func(main_loop, stt_priority_queue):
                                 keyword_in_text(norm_text, SLEEP_KEYWORD) or
                                 keyword_in_text(norm_text, WAKE_KEYWORD)):
                             if current_time - pending_learn_timestamp < LEARN_BUFFER_TIMEOUT:
-                                pending_learn += " " + transcription_text.strip()
+                                pending_learn += " " + transcription.strip()
                                 pending_learn_timestamp = current_time
                                 _LOGGER.info("Appended utterance to pending learn command: %s", pending_learn)
                                 continue
@@ -532,22 +533,36 @@ async def process_state_changed_event(event_data):
     attributes = new_state.get("attributes", {})
     command = attributes.get("command")
     if command == "update_config":
-        new_tts_engine = attributes.get("tts_engine")
-        if not new_tts_engine:
-            _LOGGER.error("No new TTS engine specified in update_config command.")
-            return
-        _LOGGER.info("Processing update_config command with new TTS engine: %s", new_tts_engine)
+        # Extract configuration parameters from attributes.
+        args = attributes  
         try:
             with open(CONFIG_FILE, "r") as f:
                 config_data = json.load(f)
-            _LOGGER.debug("Current config before update: %s", json.dumps(config_data))
-            config_data["tts_engine"] = new_tts_engine
+            updated_fields = []
+            if "tts_engine" in args:
+                config_data["tts_engine"] = args["tts_engine"]
+                updated_fields.append("tts_engine")
+            if "active_timeout" in args:
+                config_data["active_timeout"] = args["active_timeout"]
+                updated_fields.append("active_timeout")
+            if "rms_threshold" in args:
+                config_data["rms_threshold"] = args["rms_threshold"]
+                updated_fields.append("rms_threshold")
+            if "auth_token" in args:
+                config_data["auth_token"] = args["auth_token"]
+                updated_fields.append("auth_token")
+            if not updated_fields:
+                _LOGGER.error("No valid configuration fields provided in update_config command.")
+                return
             with open(CONFIG_FILE, "w") as f:
                 json.dump(config_data, f, indent=4)
-            _LOGGER.info("Configuration file updated successfully with new TTS engine: %s", new_tts_engine)
-            global config, TTS_ENGINE
-            config = config_data
-            TTS_ENGINE = new_tts_engine
+            _LOGGER.info("Configuration file updated successfully with new fields: %s", updated_fields)
+            # Optionally, update globals used by the client.
+            global TTS_ENGINE, TOKEN
+            if "tts_engine" in args:
+                TTS_ENGINE = args["tts_engine"]
+            if "auth_token" in args:
+                TOKEN = args["auth_token"]
         except Exception as e:
             _LOGGER.error("Failed to update configuration file: %s", e)
     else:
