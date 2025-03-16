@@ -29,7 +29,7 @@ from cryptography.fernet import Fernet
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "2.5.52 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "2.5.60 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
@@ -93,10 +93,15 @@ def load_config():
 
 config = load_config()
 # Ensure a unique ID is present for the client.
+config = load_config()
 if "unique_id" not in config:
-    import uuid
-    config["unique_id"] = uuid.uuid4().hex
+    # Use the friendly name as the unique_id, after sanitizing (e.g., lower case and replacing spaces with underscores)
+    friendly_name = config.get("name", "soundhive_media_player").strip().lower().replace(" ", "_")
+    config["unique_id"] = friendly_name
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
 unique_id = config["unique_id"]
+
 HA_BASE_URL = config.get("ha_url")
 TOKEN = config.get("auth_token")
 TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
@@ -159,7 +164,6 @@ MEDIA_LIBRARY = [
     {"title": "Song 2", "media_url": "http://example.com/song2.mp3"}
 ]
 
-
 # Build the registration API URL using the unique ID
 REGISTER_ENTITY_API = f"{HA_BASE_URL}/api/states/media_player.{unique_id}"
 
@@ -212,7 +216,6 @@ async def update_media_state(session, state, media_url=None, volume=None):
             else:
                 _LOGGER.error("❌ Failed to update media player state. Status: %s", resp.status)
     await asyncio.sleep(1)
-
 
 async def resolve_tts_url(session, media_content_id):
     global config, TTS_ENGINE
@@ -631,7 +634,8 @@ async def scheduled_commit(target_hour=2, target_minute=0):
     """Schedule a commit at a specific time every day (default: 2:00 AM)."""
     while True:
         now = time.localtime()
-        target = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, target_hour, target_minute, 0, now.tm_wday, now.tm_yday, now.tm_isdst))
+        target = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, target_hour, target_minute, 0,
+                                now.tm_wday, now.tm_yday, now.tm_isdst))
         if target < time.mktime(now):
             target += 86400
         wait_seconds = target - time.mktime(now)
@@ -678,6 +682,7 @@ async def process_call_service_event(event_data):
     service_data = event_data.get("event", {}).get("data", {})
     domain = service_data.get("domain")
     service = service_data.get("service")
+    # Removed HA restart logic
     if domain != "media_player":
         _LOGGER.info("Ignoring call_service event from domain: %s", domain)
         return
@@ -685,7 +690,8 @@ async def process_call_service_event(event_data):
         if service in ["play_media", "media_play"]:
             media_content_id = service_data.get("service_data", {}).get("media_content_id")
             resolved_url = await resolve_tts_url(session, media_content_id)
-            if media_content_id and ("media-source://tts/" in media_content_id or "tts_proxy" in media_content_id or (resolved_url and "tts_proxy" in resolved_url)):
+            if media_content_id and ("media-source://tts/" in media_content_id or "tts_proxy" in media_content_id or
+                                      (resolved_url and "tts_proxy" in resolved_url)):
                 global last_tts_message
                 query = media_content_id.split("?", 1)[1] if "?" in media_content_id else ""
                 params = parse_qs(query)
@@ -722,6 +728,7 @@ async def listen_for_events():
         async with session.ws_connect(WS_API_URL) as ws:
             await ws.send_json({"type": "auth", "access_token": TOKEN})
             await ws.receive_json()
+            # Subscribe only to the events you need.
             await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
             await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
             async for msg in ws:
