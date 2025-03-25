@@ -1,7 +1,8 @@
-# VERSION = "2.5.40"
+# VERSION = "1.1.05"
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import async_get
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -13,13 +14,22 @@ async def async_setup(hass: HomeAssistant, config: dict):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     try:
         _LOGGER.info("Setting up Soundhive Media Player entry: %s", entry.data)
-        # Store the config data (if needed)
         hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry.data
 
-        # Register the update listener so that option changes trigger our callback.
+        # Register the satellite as a distinct device in HA's device registry.
+        device_registry = async_get(hass)
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, entry.data["unique_id"])},
+            manufacturer="Soundhive",
+            name=entry.data.get("name"),
+            model="Soundhive Service",
+        )
+
+        # Register update listener so that option changes trigger our callback.
         entry.async_on_unload(entry.add_update_listener(update_listener))
         
-        # Forward the config entry to the media_player platform so that the entity is created.
+        # Forward the config entry to the media_player platform to create the entity.
         await hass.config_entries.async_forward_entry_setups(entry, ["media_player"])
         return True
     except Exception as e:
@@ -31,15 +41,29 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN].pop(entry.entry_id, None)
     return True
 
-async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
+from homeassistant.helpers.entity_component import async_update_entity
+
+async def update_listener(hass, entry):
     _LOGGER.info("Soundhive config entry updated: %s", entry.data)
     new_tts_engine = entry.options.get("tts_engine", entry.data.get("tts_engine"))
-    _LOGGER.info("New TTS engine in config entry: %s", new_tts_engine)
-    
-    # Retrieve the entity reference stored by the media_player platform.
+
+    # Get the entity object
     entity = hass.data.get(DOMAIN, {}).get(entry.entry_id + "_entity")
     if entity is not None:
-         await entity.async_update_config(new_tts_engine)
-         _LOGGER.info("Requested client config update with new TTS engine: %s", new_tts_engine)
+        await entity.async_update_config(new_tts_engine)
+        _LOGGER.info("Updated client configuration with new TTS engine: %s", new_tts_engine)
+
+        # This forces a manual state change to trigger state_changed event
+        hass.states.async_set(
+            entity.entity_id,
+            entity.state,
+            {
+                "command": "update_config",
+                "tts_engine": new_tts_engine,
+                "rms_threshold": entity._rms_threshold,
+                "auth_token": entity._token,
+                "ha_url": entity._ha_url,
+            },
+        )
     else:
-         _LOGGER.error("No entity found for update_listener for entry_id: %s", entry.entry_id)
+        _LOGGER.error("No entity found for update_listener for entry_id: %s", entry.entry_id)
