@@ -24,7 +24,7 @@ from urllib.parse import urlparse, parse_qs, quote_plus
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "2.5.70 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "2.5.80 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
@@ -63,6 +63,8 @@ tts_finished_time = 0           # Timestamp when TTS playback finished
 last_tts_message = ""           # Last TTS message (for filtering)
 last_llm_command = ""           # Last LLM command processed
 client_mode = "passive"         # Global client mode
+last_active_time = None
+last_media_url = None
 
 # Globals for pending learn buffering.
 pending_learn = None            # Buffer for learn command content
@@ -375,6 +377,7 @@ async def stt_processor():
                     async with aiohttp.ClientSession() as session:
                         resolved_url = await resolve_tts_url(session, tts_media_content)
                     if resolved_url:
+                        last_media_url = resolved_url
                         await play_media(resolved_url)
                     continue
                 learn_prefix = normalize_text(LEARN_COMMAND).replace(":", "")
@@ -488,41 +491,65 @@ async def listen_for_events():
         except Exception as e:
             _LOGGER.error("Error in WebSocket connection: %s. Reconnecting...", e)
         await asyncio.sleep(5)
-
+        
 async def process_call_service_event(event_data):
     _LOGGER.info("Processing call_service event: %s", event_data)
     service_data = event_data.get("event", {}).get("data", {})
     domain = service_data.get("domain")
     service = service_data.get("service")
+
     if domain == "homeassistant" and service == "restart":
         _LOGGER.info("Detected Home Assistant restart; waiting for HA to be ready.")
         await asyncio.sleep(10)
         return
+
     if domain != "media_player":
         _LOGGER.info("Ignoring call_service event from domain: %s", domain)
         return
+
+    service_payload = service_data.get("service_data", {})
+    media_content_id = service_payload.get("media_content_id")
+
     async with aiohttp.ClientSession() as session:
         if service in ["play_media", "media_play"]:
-            media_content_id = service_data.get("service_data", {}).get("media_content_id")
-            resolved_url = await resolve_tts_url(session, media_content_id)
-            if media_content_id and ("media-source://tts/" in media_content_id or "tts_proxy" in media_content_id or
-                                      (resolved_url and "tts_proxy" in resolved_url)):
+            if not media_content_id:
+                _LOGGER.info("No media_content_id provided. Assuming resume request.")
+                if current_player and current_player.get_state() == vlc.State.Paused:
+                    await resume_media()
+                else:
+                    _LOGGER.warning("Resume requested, but player not in paused state.")
+                return
+
+            if not isinstance(media_content_id, str) or not media_content_id.strip():
+                _LOGGER.warning("Invalid media_content_id received: %r", media_content_id)
+                return
+
+            # Only resolve TTS URLs
+            is_tts = "media-source://tts/" in media_content_id or "tts_proxy" in media_content_id
+            resolved_url = await resolve_tts_url(session, media_content_id) if is_tts else media_content_id
+
+            if is_tts:
                 global last_tts_message
                 query = media_content_id.split("?", 1)[1] if "?" in media_content_id else ""
                 params = parse_qs(query)
                 last_tts_message = params.get("message", [""])[0]
                 _LOGGER.info("TTS playback detected; STT processing will resume when media finishes.")
                 await clear_stt_queue(stt_priority_queue)
-            await play_media(resolved_url)
-        elif service == "media_stop":
-            await stop_media()
-        elif service == "volume_set":
-            volume_level = service_data.get("service_data", {}).get("volume_level", 0.5)
-            await set_volume(volume_level)
+
+            if resolved_url:
+                await play_media(resolved_url)
+            else:
+                _LOGGER.warning("⚠️ Skipping playback due to unresolved media URL.")
+
         elif service == "media_pause":
             await pause_media()
         elif service == "media_resume":
             await resume_media()
+        elif service == "media_stop":
+            await stop_media()
+        elif service == "volume_set":
+            volume_level = service_payload.get("volume_level", 0.5)
+            await set_volume(volume_level)
         else:
             _LOGGER.info("Unhandled service: %s", service)
 
@@ -531,9 +558,11 @@ async def process_state_changed_event(event_data):
     event = event_data.get("event", {})
     if event.get("event_type") != "state_changed":
         return
+
     new_state = event.get("data", {}).get("new_state", {})
     attributes = new_state.get("attributes", {})
     command = attributes.get("command")
+
     if command == "update_config":
         args = attributes
         try:
@@ -561,8 +590,18 @@ async def process_state_changed_event(event_data):
             reload_config()
         except Exception as e:
             _LOGGER.error("Failed to update configuration file: %s", e)
+
+    elif command == "pause_media":
+        _LOGGER.info("Received pause_media command from HA")
+        await pause_media()
+
+    elif command == "resume_media":
+        _LOGGER.info("Received resume_media command from HA")
+        await resume_media()
+
     else:
         _LOGGER.debug("Ignoring state_changed event with command: %s", command)
+
     entity_id = new_state.get("entity_id", "")
     if entity_id == MEDIA_PLAYER_ENTITY and new_state.get("state") in ["idle", "stopped"]:
         await clear_stt_queue(stt_priority_queue)
@@ -623,24 +662,39 @@ def shutdown_handler():
 
 async def main():
     global client_mode, last_active_time, stt_priority_queue
-    client_mode = "passive"
-    last_active_time = None
-    
+    global last_tts_message, last_llm_command
+    global pending_learn, pending_learn_timestamp, pending_learn_items
+
+    # ✅ Ensure all shared variables are initialized before threads run
+    last_tts_message = ""
+    last_llm_command = ""
+    pending_learn = None
+    pending_learn_timestamp = None
+    pending_learn_items = []
+
     _LOGGER.info("🚀 Soundhive Client v%s - Combined TTS, Media Playback, STT, and LLM Integration", VERSION)
-    
+
     stt_priority_queue = asyncio.PriorityQueue(maxsize=STT_QUEUE_MAXSIZE)
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
     main_loop = asyncio.get_running_loop()
-    stt_thread = threading.Thread(target=stt_thread_func, args=(main_loop, stt_priority_queue), daemon=True)
+
+    stt_thread = threading.Thread(
+        target=stt_thread_func,
+        args=(main_loop, stt_priority_queue),
+        daemon=True
+    )
     stt_thread.start()
+
     for signame in ('SIGINT', 'SIGTERM'):
         main_loop.add_signal_handler(getattr(signal, signame), shutdown_handler)
+
     tasks = [
         asyncio.create_task(continuous_stt_loop(stt_priority_queue)),
         asyncio.create_task(listen_for_events()),
         asyncio.create_task(log_client_mode()),
         asyncio.create_task(scheduled_commit(target_hour=2, target_minute=0))
     ]
+
     await shutdown_event.wait()
     _LOGGER.info("Cancelling tasks...")
     for t in tasks:
@@ -896,43 +950,6 @@ async def process_state_changed_event(event_data):
         await clear_stt_queue(stt_priority_queue)
         _LOGGER.info("Media playback finished; STT processing resumed.")
 
-async def process_call_service_event(event_data):
-    _LOGGER.info("Processing call_service event: %s", event_data)
-    service_data = event_data.get("event", {}).get("data", {})
-    domain = service_data.get("domain")
-    service = service_data.get("service")
-    if domain == "homeassistant" and service == "restart":
-        _LOGGER.info("Detected Home Assistant restart; waiting for HA to be ready.")
-        await asyncio.sleep(10)
-        return
-    if domain != "media_player":
-        _LOGGER.info("Ignoring call_service event from domain: %s", domain)
-        return
-    async with aiohttp.ClientSession() as session:
-        if service in ["play_media", "media_play"]:
-            media_content_id = service_data.get("service_data", {}).get("media_content_id")
-            resolved_url = await resolve_tts_url(session, media_content_id)
-            if media_content_id and ("media-source://tts/" in media_content_id or "tts_proxy" in media_content_id or
-                                      (resolved_url and "tts_proxy" in resolved_url)):
-                global last_tts_message
-                query = media_content_id.split("?", 1)[1] if "?" in media_content_id else ""
-                params = parse_qs(query)
-                last_tts_message = params.get("message", [""])[0]
-                _LOGGER.info("TTS playback detected; STT processing will resume when media finishes.")
-                await clear_stt_queue(stt_priority_queue)
-            await play_media(resolved_url)
-        elif service == "media_stop":
-            await stop_media()
-        elif service == "volume_set":
-            volume_level = service_data.get("service_data", {}).get("volume_level", 0.5)
-            await set_volume(volume_level)
-        elif service == "media_pause":
-            await pause_media()
-        elif service == "media_resume":
-            await resume_media()
-        else:
-            _LOGGER.info("Unhandled service: %s", service)
-
 async def process_event(event_data):
     if event_data.get("type") != "event":
         return
@@ -1251,43 +1268,6 @@ async def process_state_changed_event(event_data):
     if entity_id == MEDIA_PLAYER_ENTITY and new_state.get("state") in ["idle", "stopped"]:
         await clear_stt_queue(stt_priority_queue)
         _LOGGER.info("Media playback finished; STT processing resumed.")
-
-async def process_call_service_event(event_data):
-    _LOGGER.info("Processing call_service event: %s", event_data)
-    service_data = event_data.get("event", {}).get("data", {})
-    domain = service_data.get("domain")
-    service = service_data.get("service")
-    if domain == "homeassistant" and service == "restart":
-        _LOGGER.info("Detected Home Assistant restart; waiting for HA to be ready.")
-        await asyncio.sleep(10)
-        return
-    if domain != "media_player":
-        _LOGGER.info("Ignoring call_service event from domain: %s", domain)
-        return
-    async with aiohttp.ClientSession() as session:
-        if service in ["play_media", "media_play"]:
-            media_content_id = service_data.get("service_data", {}).get("media_content_id")
-            resolved_url = await resolve_tts_url(session, media_content_id)
-            if media_content_id and ("media-source://tts/" in media_content_id or "tts_proxy" in media_content_id or
-                                      (resolved_url and "tts_proxy" in resolved_url)):
-                global last_tts_message
-                query = media_content_id.split("?", 1)[1] if "?" in media_content_id else ""
-                params = parse_qs(query)
-                last_tts_message = params.get("message", [""])[0]
-                _LOGGER.info("TTS playback detected; STT processing will resume when media finishes.")
-                await clear_stt_queue(stt_priority_queue)
-            await play_media(resolved_url)
-        elif service == "media_stop":
-            await stop_media()
-        elif service == "volume_set":
-            volume_level = service_data.get("service_data", {}).get("volume_level", 0.5)
-            await set_volume(volume_level)
-        elif service == "media_pause":
-            await pause_media()
-        elif service == "media_resume":
-            await resume_media()
-        else:
-            _LOGGER.info("Unhandled service: %s", service)
 
 async def process_event(event_data):
     if event_data.get("type") != "event":
@@ -1609,43 +1589,6 @@ async def process_state_changed_event(event_data):
         await clear_stt_queue(stt_priority_queue)
         _LOGGER.info("Media playback finished; STT processing resumed.")
 
-async def process_call_service_event(event_data):
-    _LOGGER.info("Processing call_service event: %s", event_data)
-    service_data = event_data.get("event", {}).get("data", {})
-    domain = service_data.get("domain")
-    service = service_data.get("service")
-    if domain == "homeassistant" and service == "restart":
-        _LOGGER.info("Detected Home Assistant restart; waiting for HA to be ready.")
-        await asyncio.sleep(10)
-        return
-    if domain != "media_player":
-        _LOGGER.info("Ignoring call_service event from domain: %s", domain)
-        return
-    async with aiohttp.ClientSession() as session:
-        if service in ["play_media", "media_play"]:
-            media_content_id = service_data.get("service_data", {}).get("media_content_id")
-            resolved_url = await resolve_tts_url(session, media_content_id)
-            if media_content_id and ("media-source://tts/" in media_content_id or "tts_proxy" in media_content_id or
-                                      (resolved_url and "tts_proxy" in resolved_url)):
-                global last_tts_message
-                query = media_content_id.split("?", 1)[1] if "?" in media_content_id else ""
-                params = parse_qs(query)
-                last_tts_message = params.get("message", [""])[0]
-                _LOGGER.info("TTS playback detected; STT processing will resume when media finishes.")
-                await clear_stt_queue(stt_priority_queue)
-            await play_media(resolved_url)
-        elif service == "media_stop":
-            await stop_media()
-        elif service == "volume_set":
-            volume_level = service_data.get("service_data", {}).get("volume_level", 0.5)
-            await set_volume(volume_level)
-        elif service == "media_pause":
-            await pause_media()
-        elif service == "media_resume":
-            await resume_media()
-        else:
-            _LOGGER.info("Unhandled service: %s", service)
-
 async def process_event(event_data):
     if event_data.get("type") != "event":
         return
@@ -1701,6 +1644,8 @@ def shutdown_handler():
 
 # --- Global STT Processor ---
 async def stt_processor():
+    global client_mode, last_active_time, last_tts_message, last_llm_command
+    global pending_learn, pending_learn_timestamp, pending_learn_items
     while True:
         try:
             async for transcription in stream_transcriptions(STT_URI, chunk_duration=4):
@@ -1940,43 +1885,6 @@ async def process_state_changed_event(event_data):
     if entity_id == MEDIA_PLAYER_ENTITY and new_state.get("state") in ["idle", "stopped"]:
         await clear_stt_queue(stt_priority_queue)
         _LOGGER.info("Media playback finished; STT processing resumed.")
-
-async def process_call_service_event(event_data):
-    _LOGGER.info("Processing call_service event: %s", event_data)
-    service_data = event_data.get("event", {}).get("data", {})
-    domain = service_data.get("domain")
-    service = service_data.get("service")
-    if domain == "homeassistant" and service == "restart":
-        _LOGGER.info("Detected Home Assistant restart; waiting for HA to be ready.")
-        await asyncio.sleep(10)
-        return
-    if domain != "media_player":
-        _LOGGER.info("Ignoring call_service event from domain: %s", domain)
-        return
-    async with aiohttp.ClientSession() as session:
-        if service in ["play_media", "media_play"]:
-            media_content_id = service_data.get("service_data", {}).get("media_content_id")
-            resolved_url = await resolve_tts_url(session, media_content_id)
-            if media_content_id and ("media-source://tts/" in media_content_id or "tts_proxy" in media_content_id or
-                                      (resolved_url and "tts_proxy" in resolved_url)):
-                global last_tts_message
-                query = media_content_id.split("?", 1)[1] if "?" in media_content_id else ""
-                params = parse_qs(query)
-                last_tts_message = params.get("message", [""])[0]
-                _LOGGER.info("TTS playback detected; STT processing will resume when media finishes.")
-                await clear_stt_queue(stt_priority_queue)
-            await play_media(resolved_url)
-        elif service == "media_stop":
-            await stop_media()
-        elif service == "volume_set":
-            volume_level = service_data.get("service_data", {}).get("volume_level", 0.5)
-            await set_volume(volume_level)
-        elif service == "media_pause":
-            await pause_media()
-        elif service == "media_resume":
-            await resume_media()
-        else:
-            _LOGGER.info("Unhandled service: %s", service)
 
 async def process_event(event_data):
     if event_data.get("type") != "event":
