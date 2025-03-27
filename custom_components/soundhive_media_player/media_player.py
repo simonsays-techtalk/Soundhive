@@ -121,3 +121,9 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
     async def async_update_config(self, new_tts_engine):
         self._tts_engine = new_tts_engine
         _LOGGER.info("Updated TTS engine to: %s", new_tts_engine)
+
+
+    async def async_update_config(self, new_tts_engine, new_rms_threshold):
+        self._tts_engine = new_tts_engine
+        self._rms_threshold = new_rms_threshold
+        _LOGGER.info("Updated config: TTS=%s, Mic Sensitivity=%.4f", new_tts_engine, new_rms_threshold)
