@@ -1,4 +1,4 @@
-# VERSION = "1.2.0"
+
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -16,7 +16,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         _LOGGER.info("Setting up Soundhive Media Player entry: %s", entry.data)
         hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry.data
 
-        # Register the satellite as a distinct device in HA's device registry.
         device_registry = async_get(hass)
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
@@ -26,10 +25,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             model="Soundhive Service",
         )
 
-        # Register update listener so that option changes trigger our callback.
         entry.async_on_unload(entry.add_update_listener(update_listener))
-        
-        # Forward the config entry to the media_player platform to create the entity.
         await hass.config_entries.async_forward_entry_setups(entry, ["media_player"])
         return True
     except Exception as e:
@@ -41,26 +37,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN].pop(entry.entry_id, None)
     return True
 
-from homeassistant.helpers.entity_component import async_update_entity
-
 async def update_listener(hass, entry):
     _LOGGER.info("Soundhive config entry updated: %s", entry.data)
-    new_tts_engine = entry.options.get("tts_engine", entry.data.get("tts_engine"))
+    new_tts_engine = entry.options.get("tts_engine") or entry.data.get("tts_engine") or "tts.google_translate_en_com"
+    new_rms_threshold = entry.options.get("rms_threshold") or entry.data.get("rms_threshold") or 0.008
 
-    # Get the entity object
     entity = hass.data.get(DOMAIN, {}).get(entry.entry_id + "_entity")
     if entity is not None:
-        await entity.async_update_config(new_tts_engine)
-        _LOGGER.info("Updated client configuration with new TTS engine: %s", new_tts_engine)
+        await entity.async_update_config(new_tts_engine, new_rms_threshold)
+        _LOGGER.info("Updated client config with TTS: %s and RMS: %.4f", new_tts_engine, new_rms_threshold)
 
-        # This forces a manual state change to trigger state_changed event
         hass.states.async_set(
             entity.entity_id,
             entity.state,
             {
                 "command": "update_config",
                 "tts_engine": new_tts_engine,
-                "rms_threshold": entity._rms_threshold,
+                "rms_threshold": new_rms_threshold,
                 "auth_token": entity._token,
                 "ha_url": entity._ha_url,
             },
