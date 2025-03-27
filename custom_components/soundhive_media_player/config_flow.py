@@ -1,3 +1,4 @@
+
 import voluptuous as vol
 import logging
 import uuid
@@ -82,19 +83,18 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         tts_engines = await self._get_tts_engines()
 
         defaults = {
-   	   "ha_url": self.config_entry.options.get("ha_url", self.config_entry.data.get("ha_url", "http://localhost:8123")),
-    	   CONF_TOKEN: self.config_entry.options.get(CONF_TOKEN, self.config_entry.data.get(CONF_TOKEN, "")),
-           "tts_engine": self.config_entry.options.get("tts_engine", self.config_entry.data.get("tts_engine", DEFAULT_TTS)),
-           "rms_threshold": self.config_entry.options.get("rms_threshold", self.config_entry.data.get("rms_threshold", DEFAULT_RMS)),
+            "ha_url": self.config_entry.options.get("ha_url", self.config_entry.data.get("ha_url", "http://localhost:8123")),
+            CONF_TOKEN: self.config_entry.options.get(CONF_TOKEN, self.config_entry.data.get(CONF_TOKEN, "")),
+            "tts_engine": self.config_entry.options.get("tts_engine", self.config_entry.data.get("tts_engine", DEFAULT_TTS)),
+            "rms_threshold": self.config_entry.options.get("rms_threshold", self.config_entry.data.get("rms_threshold", DEFAULT_RMS)),
         }
 
-
-        schema = vol.Schema({
+        schema = {
             vol.Required("ha_url", default=defaults["ha_url"]): str,
             vol.Required(CONF_TOKEN, default=defaults[CONF_TOKEN]): str,
             vol.Required("tts_engine", default=defaults["tts_engine"]): vol.In(tts_engines),
-            vol.Required("rms_threshold", default=defaults["rms_threshold"]): float,
-        })
+            vol.Required("rms_threshold", default=defaults["rms_threshold"]): vol.All(float, vol.Range(min=0.001, max=0.1)),
+        }
 
         if user_input is not None:
             if not await self._validate_token(user_input[CONF_TOKEN], user_input["ha_url"]):
@@ -102,7 +102,7 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
             else:
                 return self.async_create_entry(title=self.config_entry.title, data=user_input)
 
-        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema), errors=errors)
 
     async def _get_tts_engines(self):
         return sorted({
