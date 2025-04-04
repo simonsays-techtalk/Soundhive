@@ -74,6 +74,45 @@ custom_components/soundhive_media_player/  # HA integration
 
 ---
 
+## ✅ Development Roadmap & Checklist
+
+### ✅ Done
+- First setup stores settings correctly
+- Installer updates config with unique ID
+- Multiple clients/satellites supported
+- Unique device, entity, and UI card per satellite
+- Client re-registers with HA after HA restarts
+- Media player UI works
+- All settings are loaded from config JSON and written from HA
+- Home Assistant changes push to config file
+- Working volume/play/pause controls
+- User-defined wake/goodbye word
+
+### 🔧 In Progress / Planned
+- Pause STT listening during media playback
+- Display currently playing media in HA UI
+- Temporarily increase RMS threshold during playback
+- Full integration with HA Media Library
+- Persist changes from HA automations into client config or database
+- Timer/alarm support (check time, trigger sounds)
+- Power-off button exposed to HA
+- LED control for Mic2HAT
+- Integration icon (for HACS/HA branding)
+- Wake word integration (beyond keyword matching)
+- Resume interrupted media playback after TTS
+- Improve volume controls (or allow physical button integration)
+- Separate TTS and media playback pathways
+- Add robust logging, retries, error handling
+- Web UI for standalone configuration
+
+### 🧠 Future Ideas
+- Visual Web UI config panel on client
+- Explore HACS discovery and registration
+- Document full Whisper.cpp + ChromaDB usage and flow
+- Clean up entity display titles
+
+---
+
 ## 📋 License
 
 This project is open-source and licensed under MIT.
