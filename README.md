@@ -25,9 +25,8 @@ Soundhive is a minimal, zero-cloud media player client that runs on a Raspberry 
 3. Run the installer:
 
 ```bash
-wget https://raw.githubusercontent.com/simonsays-techtalk/Soundhive/main/installer/install.sh
-chmod +x install.sh
-./install.sh
+wget https://raw.githubusercontent.com/simonsays-techtalk/Soundhive/main/installer/install.py
+python3 install.py
 ```
 
 4. Follow the prompts (you’ll enter your HA token, select TTS/STT settings, etc.)
@@ -68,8 +67,8 @@ chmod +x install.sh
 ## 🗂 Structure Overview
 
 ```
-client/soundhive_client.py   # Main logic for TTS/STT/playback
-installer/install.sh         # Setup script for Raspberry Pi
+client/soundhive_client.py           # Main logic for TTS/STT/playback
+installer/install.py                # Python-based setup script for Raspberry Pi
 custom_components/soundhive_media_player/  # HA integration
 ```
 
@@ -81,6 +80,6 @@ This project is open-source and licensed under MIT.
 
 ---
 
-Built with ❤️ by Roger and his local AI.
+Built with ❤️ by simonsays-techtalk and his local AI.
 
 
