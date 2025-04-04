@@ -82,11 +82,14 @@ Other Actions:
 """
     print(summary)
 
+import socket
+
 def prompt_for_configuration(install_type):
-    # Check for an existing config file.
+    # Load existing config if available
     config = {}
     if os.path.exists(CONFIG_FILE):
-        choice = manual_input(f"Detected previous configuration in '{CONFIG_FILE}'.\nWould you like to use the existing configuration? [y/n]: ").strip().lower()
+        choice = manual_input(f"Detected previous configuration in '{CONFIG_FILE}'.
+Would you like to use the existing configuration? [y/n]: ").strip().lower()
         if choice == "y":
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -97,51 +100,51 @@ def prompt_for_configuration(install_type):
                 sys.exit(1)
         else:
             print("Proceeding with new configuration. The existing configuration will be overwritten.")
+
     print("Soundhive Client Setup")
     ha_url = manual_input("Enter Home Assistant URL (e.g., http://192.168.1.100:8123): ").strip()
     auth_token = manual_input("Enter Home Assistant Auth Token: ").strip()
-    tts_engine = manual_input("Enter TTS Engine (default: tts.google_translate_en_com): ").strip()
-    if not tts_engine:
-        tts_engine = "tts.google_translate_en_com"
-    alsa_device = manual_input("Enter ALSA device (default: dmix:CARD=seeed2micvoicec,DEV=0): ").strip()
-    if not alsa_device:
-        alsa_device = "dmix:CARD=seeed2micvoicec,DEV=0"
+    tts_engine = manual_input("Enter TTS Engine (default: tts.google_translate_en_com): ").strip() or "tts.google_translate_en_com"
+    alsa_device = manual_input("Enter ALSA device (default: dmix:CARD=seeed2micvoicec,DEV=0): ").strip() or "dmix:CARD=seeed2micvoicec,DEV=0"
     
     if install_type == "full":
-        stt_uri = manual_input("Enter STT server URI (default: http://192.168.1.100:10900/inference): ").strip()
-        if not stt_uri:
-            stt_uri = "http://192.168.1.100/inference"
-        llm_uri = manual_input("Enter LLM server URI (default: http://192.168.1.100:11434/api/generate): ").strip()
-        if not llm_uri:
-            llm_uri = "http://192.168.1.100:11434/api/generate"
+        stt_uri = manual_input("Enter STT server URI (default: http://192.168.1.100:10900/inference): ").strip() or "http://192.168.1.100:10900/inference"
+        llm_uri = manual_input("Enter LLM server URI (default: http://192.168.1.100:11434/api/generate): ").strip() or "http://192.168.1.100:11434/api/generate"
         active_timeout = manual_input("Enter active timeout in seconds (default: 15): ").strip()
-        if not active_timeout:
-            active_timeout = 15
-        else:
-            try:
-                active_timeout = int(active_timeout)
-            except ValueError:
-                active_timeout = 15
+        try:
+            active_timeout = float(active_timeout) if active_timeout else 15.0
+        except ValueError:
+            active_timeout = 15.0
     else:
         stt_uri = ""
         llm_uri = ""
-        active_timeout = 0
+        active_timeout = 0.0
 
     volume = manual_input("Enter default volume (0.0 to 1.0, default: 0.5): ").strip()
-    if not volume:
+    try:
+        volume = float(volume) if volume else 0.5
+    except ValueError:
         volume = 0.5
-    else:
-        try:
-            volume = float(volume)
-        except ValueError:
-            volume = 0.5
 
-    rms_threshold = "0.008"
+    rms_threshold = "0.005"
+    stop_keyword = manual_input("Enter stop keyword (default: assistant stop): ").strip() or "assistant stop"
+    chromadb_url = manual_input("Enter ChromaDB URL (optional): ").strip()
+    llm_model = manual_input("Enter LLM model (default: llama3.1:8b): ").strip() or "llama3.1:8b"
+    name = manual_input("Enter friendly device name (e.g., Soundhive Livingroom): ").strip() or "Soundhive Device"
 
-    # Generate and store a new unique_id if not present.
+    # Generate unique_id if not already present
     if "unique_id" not in config:
-        config["unique_id"] = str(uuid.uuid4())
-        print(f"Generated new unique_id: {config['unique_id']}")
+        config["unique_id"] = f"soundhive_{str(uuid.uuid4())[:8]}"
+        print(f"Generated unique_id: {config['unique_id']}")
+
+    # Auto-detect client IP
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        client_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        client_ip = "0.0.0.0"
 
     config.update({
         "ha_url": ha_url,
@@ -158,8 +161,15 @@ def prompt_for_configuration(install_type):
         "alarm_keyword": "alarm now",
         "clear_alarm_keyword": "clear alarm",
         "rms_threshold": rms_threshold,
-        "install_type": install_type
+        "install_type": install_type,
+        "stop_keyword": stop_keyword,
+        "chromadb_url": chromadb_url,
+        "llm_model": llm_model,
+        "integration_mode": True,
+        "name": name,
+        "client_ip": client_ip
     })
+
     return config
 
 def write_config_file(config, filename=CONFIG_FILE):
