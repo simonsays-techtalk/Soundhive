@@ -48,18 +48,29 @@ async def async_setup_entry(hass, entry, async_add_entities):
     )
 
 class SoundhiveMediaPlayer(MediaPlayerEntity):
-    def __init__(self, hass, name, unique_id, ha_url, tts_engine, token, rms_threshold):
-    	self.hass = hass
-    	self._name = name
-    	self._unique_id = unique_id
-    	self._ha_url = ha_url
-    	self._tts_engine = tts_engine
-    	self._token = token
-    	self._rms_threshold = rms_threshold
-    	self._state = STATE_IDLE          # ✅ Always start idle
-    	self._volume_level = 0.4
-    	self._media_loaded = False        # ✅ Nothing to resume until media is played
-    	self._attr_supported_features = SUPPORT_SOUNHIVE
+    def __init__(self, hass, name, unique_id, ha_url, tts_engine, token, rms_threshold,
+                 stt_uri=None, llm_uri=None, wake_keyword=None, sleep_keyword=None,
+                 active_timeout=30, volume=0.4, alarm_keyword="alarm now", clear_alarm_keyword="clear alarm", stop_keyword="stop"):
+
+        self.hass = hass
+        self._name = name
+        self._unique_id = unique_id
+        self._ha_url = ha_url
+        self._tts_engine = tts_engine
+        self._token = token
+        self._rms_threshold = rms_threshold
+        self._stt_uri = stt_uri
+        self._llm_uri = llm_uri
+        self._wake_keyword = wake_keyword
+        self._sleep_keyword = sleep_keyword
+        self._active_timeout = active_timeout
+        self._volume_level = volume
+        self._alarm_keyword = alarm_keyword
+        self._clear_alarm_keyword = clear_alarm_keyword
+        self._stop_keyword = stop_keyword
+        self._state = STATE_IDLE
+        self._media_loaded = False
+        self._attr_supported_features = SUPPORT_SOUNHIVE
 
     @property
     def unique_id(self):
@@ -118,12 +129,44 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._media_loaded = True
         self._state = STATE_PLAYING
 
-    async def async_update_config(self, new_tts_engine):
-        self._tts_engine = new_tts_engine
-        _LOGGER.info("Updated TTS engine to: %s", new_tts_engine)
-
-
-    async def async_update_config(self, new_tts_engine, new_rms_threshold):
+    async def async_update_config(
+        self,
+        new_tts_engine,
+        new_rms_threshold,
+        new_stt_uri,
+        new_llm_uri,
+        new_wake_keyword,
+        new_sleep_keyword,
+        new_active_timeout,
+        new_volume,
+        new_alarm_keyword,
+        new_clear_alarm_keyword,
+        new_stop_keyword
+    ):
         self._tts_engine = new_tts_engine
         self._rms_threshold = new_rms_threshold
-        _LOGGER.info("Updated config: TTS=%s, Mic Sensitivity=%.4f", new_tts_engine, new_rms_threshold)
+        self._stt_uri = new_stt_uri
+        self._llm_uri = new_llm_uri
+        self._wake_keyword = new_wake_keyword
+        self._sleep_keyword = new_sleep_keyword
+        self._active_timeout = new_active_timeout
+        self._volume_level = new_volume
+        self._alarm_keyword = new_alarm_keyword
+        self._clear_alarm_keyword = new_clear_alarm_keyword
+        self._stop_keyword = new_stop_keyword
+
+        _LOGGER.info(
+            "Updated config: TTS=%s, RMS=%.4f, STT URI=%s, LLM URI=%s, Wake Keyword=%s, Sleep Keyword=%s, Timeout=%s, Volume=%.1f, Alarm Keyword=%s, Clear Alarm Keyword=%s, Stop Keyword=%s",
+            new_tts_engine,
+            new_rms_threshold,
+            new_stt_uri,
+            new_llm_uri,
+            new_wake_keyword,
+            new_sleep_keyword,
+            new_active_timeout,
+            new_volume,
+            new_alarm_keyword,
+            new_clear_alarm_keyword,
+            new_stop_keyword
+        )
+

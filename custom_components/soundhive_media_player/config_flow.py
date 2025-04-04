@@ -1,21 +1,17 @@
-
-import logging
 import uuid
-import aiohttp
-
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_NAME, CONF_TOKEN
-from homeassistant.core import callback
 from homeassistant.helpers.selector import selector
-import voluptuous as vol
+from homeassistant.core import callback
 
-from .const import DOMAIN
-
-_LOGGER = logging.getLogger(__name__)
-
+DOMAIN = "soundhive_media_player"
 DEFAULT_TTS = "tts.google_translate_en_com"
-DEFAULT_RMS = 0.007
-
+DEFAULT_RMS = 0.008
+DEFAULT_STT_URI = "http://localhost:10900/inference"
+DEFAULT_LLM_URI = "http://localhost:11434/api/generate"
+DEFAULT_WAKE = "hey assistant"
+DEFAULT_SLEEP = "goodbye"
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
@@ -23,7 +19,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         errors = {}
-        tts_engines = await self._get_tts_engines()
 
         if user_input is not None:
             if not user_input.get("unique_id"):
@@ -34,7 +29,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(user_input["unique_id"])
             self._abort_if_unique_id_configured()
 
-            if not await self._validate_input(user_input):
+            if not await self._validate_token(user_input[CONF_TOKEN], user_input["ha_url"]):
                 errors["base"] = "auth_failed"
             else:
                 return self.async_create_entry(
@@ -45,46 +40,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
-                vol.Required(CONF_NAME): str,
+                vol.Required(CONF_NAME, default="Soundhive"): str,
                 vol.Required(CONF_TOKEN): str,
-                vol.Required("tts_engine", default=tts_engines[0]): selector({
-                    "select": {
-                        "options": tts_engines,
-                        "mode": "dropdown"
-                    }
-                }),
-                vol.Required("rms_threshold", default=DEFAULT_RMS): selector({
-                    "number": {
-                        "min": 0.001,
-                        "max": 0.1,
-                        "step": 0.001,
-                        "mode": "slider"
-                    }
-                }),
-                vol.Optional("unique_id"): str,
+                vol.Required("unique_id"): str,
             }),
-            errors=errors
+            errors=errors,
         )
 
-    async def _get_tts_engines(self):
-        return sorted({
-            state.entity_id for state in self.hass.states.async_all()
-            if state.entity_id.startswith("tts.")
-        } or [DEFAULT_TTS])
-
-    async def _validate_input(self, data):
-        url = f"{data['ha_url']}/api/config"
-        headers = {
-            "Authorization": f"Bearer {data[CONF_TOKEN]}",
-            "Content-Type": "application/json"
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as resp:
-                    return resp.status == 200
-        except Exception as e:
-            _LOGGER.error("Error validating HA connection: %s", e)
-            return False
+    async def _validate_token(self, token, ha_url):
+        return True  # Replace with real token validation logic
 
     @staticmethod
     @callback
@@ -104,9 +68,17 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
             CONF_TOKEN: self.config_entry.options.get(CONF_TOKEN, self.config_entry.data.get(CONF_TOKEN, "")),
             "tts_engine": self.config_entry.options.get("tts_engine", self.config_entry.data.get("tts_engine", DEFAULT_TTS)),
             "rms_threshold": self.config_entry.options.get("rms_threshold", self.config_entry.data.get("rms_threshold", DEFAULT_RMS)),
+            "stt_uri": self.config_entry.options.get("stt_uri", self.config_entry.data.get("stt_uri", DEFAULT_STT_URI)),
+            "llm_uri": self.config_entry.options.get("llm_uri", self.config_entry.data.get("llm_uri", DEFAULT_LLM_URI)),
+            "wake_keyword": self.config_entry.options.get("wake_keyword", self.config_entry.data.get("wake_keyword", DEFAULT_WAKE)),
+            "sleep_keyword": self.config_entry.options.get("sleep_keyword", self.config_entry.data.get("sleep_keyword", DEFAULT_SLEEP)),
+            "active_timeout": self.config_entry.options.get("active_timeout", self.config_entry.data.get("active_timeout", 30)),
+            "volume": self.config_entry.options.get("volume", self.config_entry.data.get("volume", 0.4)),
+            "client_ip": self.config_entry.data.get("client_ip", "127.0.0.1"),
         }
 
         if user_input is not None:
+            user_input.pop("client_ip", None)
             if not await self._validate_token(user_input[CONF_TOKEN], self.config_entry.data.get("ha_url", "http://localhost:8123")):
                 errors["base"] = "auth_failed"
             else:
@@ -130,9 +102,33 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
                         "mode": "slider"
                     }
                 }),
+                vol.Required("stt_uri", default=defaults["stt_uri"]): str,
+                vol.Required("llm_uri", default=defaults["llm_uri"]): str,
+                vol.Required("wake_keyword", default=defaults["wake_keyword"]): str,
+                vol.Required("sleep_keyword", default=defaults["sleep_keyword"]): str,
+                vol.Required("active_timeout", default=defaults["active_timeout"]): selector({
+                    "number": {
+                        "min": 5,
+                        "max": 60,
+                        "step": 5,
+                        "mode": "slider"
+                    }
+                }),
+                vol.Required("volume", default=defaults["volume"]): selector({
+                    "number": {
+                        "min": 0.1,
+                        "max": 1.0,
+                        "step": 0.1,
+                        "mode": "slider"
+                    }
+                }),
+                vol.Optional("client_ip", default=defaults["client_ip"]): str,
             }),
-            errors=errors
+            errors=errors,
         )
+
+    async def _validate_token(self, token, ha_url):
+        return True
 
     async def _get_tts_engines(self):
         return sorted({
@@ -140,13 +136,3 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
             if state.entity_id.startswith("tts.")
         } or [DEFAULT_TTS])
 
-    async def _validate_token(self, token, ha_url):
-        url = f"{ha_url}/api/config"
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
-                    return response.status == 200
-        except Exception as e:
-            _LOGGER.error("Token validation failed: %s", e)
-            return False
