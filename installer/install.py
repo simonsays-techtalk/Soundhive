@@ -51,7 +51,7 @@ def detect_device_type():
 
 def print_pre_install_summary(install_type):
     summary = f"""
-Installer version: 2.5.70
+Installer version: 4.0.0.1
 ---------------------------------------------------------
 The following components will be installed/configured:
 ---------------------------------------------------------
