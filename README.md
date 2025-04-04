@@ -4,6 +4,8 @@
 
 Soundhive is a minimal, zero-cloud media player client that runs on a Raspberry Pi and integrates seamlessly with Home Assistant. It features speech-to-text (STT), large language model (LLM) processing, and text-to-speech (TTS) in a single pipeline — with optional offline processing using Whisper.cpp and Piper.
 
+> 🚨 **Note:** Alarm functionality is on the roadmap but is **not yet active**. Stay tuned for future updates.
+
 ---
 
 ## 🚀 Features

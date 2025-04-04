@@ -7,6 +7,7 @@ import stat
 import platform
 import base64
 import uuid
+import socket
 
 # Define home directory and dedicated virtual environment path.
 HOME_DIR = os.environ["HOME"]
@@ -51,7 +52,7 @@ def detect_device_type():
 
 def print_pre_install_summary(install_type):
     summary = f"""
-Installer version: 4.0.0.1
+Installer version: 4.0.0.2
 ---------------------------------------------------------
 The following components will be installed/configured:
 ---------------------------------------------------------
@@ -82,14 +83,14 @@ Other Actions:
 """
     print(summary)
 
-import socket
-
 def prompt_for_configuration(install_type):
-    # Load existing config if available
+    # Check for an existing config file.
     config = {}
     if os.path.exists(CONFIG_FILE):
-        choice = manual_input(f"Detected previous configuration in '{CONFIG_FILE}'.
-Would you like to use the existing configuration? [y/n]: ").strip().lower()
+        choice = manual_input(
+            f"Detected previous configuration in '{CONFIG_FILE}'.\n"
+            "Would you like to use the existing configuration? [y/n]: "
+        ).strip().lower()
         if choice == "y":
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -100,7 +101,6 @@ Would you like to use the existing configuration? [y/n]: ").strip().lower()
                 sys.exit(1)
         else:
             print("Proceeding with new configuration. The existing configuration will be overwritten.")
-
     print("Soundhive Client Setup")
     ha_url = manual_input("Enter Home Assistant URL (e.g., http://192.168.1.100:8123): ").strip()
     auth_token = manual_input("Enter Home Assistant Auth Token: ").strip()
@@ -126,18 +126,16 @@ Would you like to use the existing configuration? [y/n]: ").strip().lower()
     except ValueError:
         volume = 0.5
 
-    rms_threshold = "0.005"
     stop_keyword = manual_input("Enter stop keyword (default: assistant stop): ").strip() or "assistant stop"
     chromadb_url = manual_input("Enter ChromaDB URL (optional): ").strip()
     llm_model = manual_input("Enter LLM model (default: llama3.1:8b): ").strip() or "llama3.1:8b"
     name = manual_input("Enter friendly device name (e.g., Soundhive Livingroom): ").strip() or "Soundhive Device"
+    rms_threshold = "0.008"
 
-    # Generate unique_id if not already present
     if "unique_id" not in config:
         config["unique_id"] = f"soundhive_{str(uuid.uuid4())[:8]}"
-        print(f"Generated unique_id: {config['unique_id']}")
+        print(f"Generated new unique_id: {config['unique_id']}")
 
-    # Auto-detect client IP
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -169,7 +167,6 @@ Would you like to use the existing configuration? [y/n]: ").strip().lower()
         "name": name,
         "client_ip": client_ip
     })
-
     return config
 
 def write_config_file(config, filename=CONFIG_FILE):
@@ -195,7 +192,7 @@ def install_dependencies():
     print("Installing required Python packages...")
     try:
         subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", 
-                        "aiohttp", "python-vlc", "sounddevice", "soundfile"], check=True)
+                        "aiohttp", "python-vlc", "sounddevice", "soundfile", "requests"], check=True)
         print("Python dependencies installed.")
     except subprocess.CalledProcessError as e:
         print(f"Error installing Python dependencies: {e}")
@@ -422,3 +419,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

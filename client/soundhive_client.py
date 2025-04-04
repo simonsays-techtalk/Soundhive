@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, quote_plus
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "4.0.0.1 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "4.0.0.2 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
 STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
