@@ -55,7 +55,7 @@ python3 install.py
 
 - Client not connecting? Double-check your HA token and network.
 - No sound? Make sure your device supports audio output and test with `aplay`
-- No TTS? Ensure Piper is installed and configured in HA (`tts.piper_2` or similar).
+- No TTS? Ensure Piper is installed and configured in HA (`tts.piper` or similar).
 - Client not appearing? Restart HA and enable debug logging if needed.
 
 ---
