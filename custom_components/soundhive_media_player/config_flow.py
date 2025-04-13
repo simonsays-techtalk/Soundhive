@@ -19,16 +19,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         errors = {}
-
         if user_input is not None:
             if not user_input.get("unique_id"):
                 user_input["unique_id"] = str(uuid.uuid4())
-
             user_input["ha_url"] = "http://localhost:8123"
-
             await self.async_set_unique_id(user_input["unique_id"])
             self._abort_if_unique_id_configured()
-
             if not await self._validate_token(user_input[CONF_TOKEN], user_input["ha_url"]):
                 errors["base"] = "auth_failed"
             else:
@@ -36,7 +32,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     title=user_input.get(CONF_NAME, "Soundhive"),
                     data=user_input,
                 )
-
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
@@ -48,7 +43,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def _validate_token(self, token, ha_url):
-        return True  # Replace with real token validation logic
+        return True
 
     @staticmethod
     @callback
@@ -58,72 +53,80 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 class SoundhiveOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, config_entry):
-        self.config_entry = config_entry
+        self._entry = config_entry
 
     async def async_step_init(self, user_input=None):
         errors = {}
         tts_engines = await self._get_tts_engines()
 
+        current_data = self._entry.data
+        current_options = self._entry.options
+
+        entity_id = f"media_player.{current_data['unique_id']}"
+        state = self.hass.states.get(entity_id)
+        default_alsa_devices = [
+            "seeed-2mic-voicecard: bcm2835-i2s-wm8960-hifi wm8960-hifi-0 (hw:2,0)",
+            "capture",
+            "array",
+            "default"
+        ]
+        alsa_devices = state.attributes.get("alsa_devices", default_alsa_devices) if state else default_alsa_devices
+
         defaults = {
-            CONF_TOKEN: self.config_entry.options.get(CONF_TOKEN, self.config_entry.data.get(CONF_TOKEN, "")),
-            "tts_engine": self.config_entry.options.get("tts_engine", self.config_entry.data.get("tts_engine", DEFAULT_TTS)),
-            "rms_threshold": self.config_entry.options.get("rms_threshold", self.config_entry.data.get("rms_threshold", DEFAULT_RMS)),
-            "stt_uri": self.config_entry.options.get("stt_uri", self.config_entry.data.get("stt_uri", DEFAULT_STT_URI)),
-            "llm_uri": self.config_entry.options.get("llm_uri", self.config_entry.data.get("llm_uri", DEFAULT_LLM_URI)),
-            "wake_keyword": self.config_entry.options.get("wake_keyword", self.config_entry.data.get("wake_keyword", DEFAULT_WAKE)),
-            "sleep_keyword": self.config_entry.options.get("sleep_keyword", self.config_entry.data.get("sleep_keyword", DEFAULT_SLEEP)),
-            "active_timeout": self.config_entry.options.get("active_timeout", self.config_entry.data.get("active_timeout", 30)),
-            "volume": self.config_entry.options.get("volume", self.config_entry.data.get("volume", 0.4)),
-            "client_ip": self.config_entry.data.get("client_ip", "127.0.0.1"),
+            CONF_TOKEN: current_options.get(CONF_TOKEN, current_data.get(CONF_TOKEN, "")),
+            "tts_engine": current_options.get("tts_engine", current_data.get("tts_engine", DEFAULT_TTS)),
+            "rms_threshold": current_options.get("rms_threshold", current_data.get("rms_threshold", DEFAULT_RMS)),
+            "stt_uri": current_options.get("stt_uri", current_data.get("stt_uri", DEFAULT_STT_URI)),
+            "llm_uri": current_options.get("llm_uri", current_data.get("llm_uri", DEFAULT_LLM_URI)),
+            "llm_model": current_options.get("llm_model", current_data.get("llm_model", "llama3.1:8b")),
+            "chromadb_url": current_options.get("chromadb_url", current_data.get("chromadb_url", "http://madison.autohome.local:8001")),
+            "wake_keyword": current_options.get("wake_keyword", current_data.get("wake_keyword", DEFAULT_WAKE)),
+            "sleep_keyword": current_options.get("sleep_keyword", current_data.get("sleep_keyword", DEFAULT_SLEEP)),
+            "active_timeout": current_options.get("active_timeout", current_data.get("active_timeout", 30)),
+            "volume": current_options.get("volume", current_data.get("volume", 0.4)),
+            "alarm_keyword": current_options.get("alarm_keyword", current_data.get("alarm_keyword", "alarm now")),
+            "clear_alarm_keyword": current_options.get("clear_alarm_keyword", current_data.get("clear_alarm_keyword", "clear alarm")),
+            "stop_keyword": current_options.get("stop_keyword", current_data.get("stop_keyword", "stop")),
+            "alsa_device": current_options.get("alsa_device", alsa_devices[0]),
+            "client_ip": current_data.get("client_ip", "127.0.0.1")
         }
 
         if user_input is not None:
-            user_input.pop("client_ip", None)
-            if not await self._validate_token(user_input[CONF_TOKEN], self.config_entry.data.get("ha_url", "http://localhost:8123")):
+            if not await self._validate_token(user_input[CONF_TOKEN], current_data.get("ha_url", "http://localhost:8123")):
                 errors["base"] = "auth_failed"
             else:
-                return self.async_create_entry(title=self.config_entry.title, data=user_input)
+                return self.async_create_entry(title=self._entry.title, data=user_input)
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
                 vol.Required(CONF_TOKEN, default=defaults[CONF_TOKEN]): str,
                 vol.Required("tts_engine", default=defaults["tts_engine"]): selector({
-                    "select": {
-                        "options": tts_engines,
-                        "mode": "dropdown"
-                    }
+                    "select": {"options": tts_engines, "mode": "dropdown"}
                 }),
                 vol.Required("rms_threshold", default=defaults["rms_threshold"]): selector({
-                    "number": {
-                        "min": 0.001,
-                        "max": 0.1,
-                        "step": 0.001,
-                        "mode": "slider"
-                    }
+                    "number": {"min": 0.001, "max": 0.1, "step": 0.001, "mode": "slider"}
                 }),
                 vol.Required("stt_uri", default=defaults["stt_uri"]): str,
                 vol.Required("llm_uri", default=defaults["llm_uri"]): str,
+                vol.Required("llm_model", default=defaults["llm_model"]): str,
+                vol.Required("chromadb_url", default=defaults["chromadb_url"]): str,
                 vol.Required("wake_keyword", default=defaults["wake_keyword"]): str,
                 vol.Required("sleep_keyword", default=defaults["sleep_keyword"]): str,
                 vol.Required("active_timeout", default=defaults["active_timeout"]): selector({
-                    "number": {
-                        "min": 5,
-                        "max": 60,
-                        "step": 5,
-                        "mode": "slider"
-                    }
+                    "number": {"min": 5, "max": 60, "step": 5, "mode": "slider"}
                 }),
                 vol.Required("volume", default=defaults["volume"]): selector({
-                    "number": {
-                        "min": 0.1,
-                        "max": 1.0,
-                        "step": 0.1,
-                        "mode": "slider"
-                    }
+                    "number": {"min": 0.1, "max": 1.0, "step": 0.1, "mode": "slider"}
                 }),
-                vol.Optional("client_ip", default=defaults["client_ip"]): str,
+                vol.Required("alarm_keyword", default=defaults["alarm_keyword"]): str,
+                vol.Required("clear_alarm_keyword", default=defaults["clear_alarm_keyword"]): str,
+                vol.Required("stop_keyword", default=defaults["stop_keyword"]): str,
+                vol.Required("alsa_device", default=defaults["alsa_device"]): selector({
+                    "select": {"options": alsa_devices, "mode": "dropdown"}
+                }),
             }),
+            description_placeholders={"client_ip": defaults["client_ip"]},
             errors=errors,
         )
 

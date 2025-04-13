@@ -106,6 +106,7 @@ custom_components/soundhive_media_player/  # HA integration
 - Separate TTS and media playback pathways
 - Add robust logging, retries, error handling
 - Web UI for standalone configuration
+- Keyword processing during transcription
 
 ### 🧠 Future Ideas
 - Visual Web UI config panel on client

@@ -20,56 +20,60 @@ import concurrent.futures
 import re
 import base64
 import uuid
+import socket
 from urllib.parse import parse_qs, quote_plus
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "4.0.0.2 Media playback, TTS, and threaded streaming STT with enhanced inter-thread communication"
+VERSION = "4.0.0.6 ALSA Device Discovery + IP Sync"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
-COOLDOWN_PERIOD = 2           # seconds cooldown after TTS finishes
-STT_QUEUE_MAXSIZE = 50        # Maximum size for the STT priority queue
-LEARN_BUFFER_TIMEOUT = 10     # seconds for buffering learn commands
+COOLDOWN_PERIOD = 2
+STT_QUEUE_MAXSIZE = 50
+LEARN_BUFFER_TIMEOUT = 10
 
-# --- Logging Setup ---
 logging.basicConfig(level=logging.INFO)
 _LOGGER = logging.getLogger("SoundhiveClient")
 
-# --- Global Variables (set via config) ---
 config = None
+received_initial_config = False
+
+# --- Global Variables (set via config) ---
 HA_BASE_URL = None
 TOKEN = None
-TTS_ENGINE = None
+WS_API_URL = None
+TTS_API_URL = None
 STT_URI = None
+RMS_THRESHOLD = 0.008  # Default fallback
+
+TTS_ENGINE = None
 STT_FORMAT = None
-VOLUME_SETTING = None
-RMS_THRESHOLD = None
+VOLUME_SETTING = 0.3
 WAKE_KEYWORD = None
 SLEEP_KEYWORD = None
 ALARM_KEYWORD = None
 CLEAR_ALARM_KEYWORD = None
-LEARN_COMMAND = None
-FORGET_COMMAND = None
-COMMIT_CODE = None
-ACTIVE_TIMEOUT = None
+ACTIVE_TIMEOUT = 30
 LLM_URI = None
-WS_API_URL = None
-TTS_API_URL = None
+STOP_KEYWORD = "assistant stop"  # Default fallback to prevent crash
+ALSA_DEVICE = None
 CHROMADB_URL = None
+LLM_MODEL = None
+LEARN_COMMAND = "learn this:"
+FORGET_COMMAND = "forget this:"
+COMMIT_CODE = "1234"
 
 # --- Other Global Variables ---
-stt_priority_queue = None     # Will be set in main()
-tts_finished_time = 0           # Timestamp when TTS playback finished
-last_tts_message = ""           # Last TTS message (for filtering)
-last_llm_command = ""           # Last LLM command processed
-client_mode = "passive"         # Global client mode
+stt_priority_queue = None
+client_mode = "passive"
+tts_finished_time = 0
+last_tts_message = ""
+last_llm_command = ""
 last_active_time = None
 last_media_url = None
-pending_learn = None            # Buffer for learn command content
-pending_learn_timestamp = None  # Timestamp for pending learn update
-pending_learn_items = []        # List of learned facts pending commit
-STOP_KEYWORD = None             # Keyword to stop media playback
+pending_learn = None
+pending_learn_timestamp = None
+pending_learn_items = []
 
-# === Configuration Loading ===
 def load_config():
     try:
         with open(CONFIG_FILE, "r") as f:
@@ -80,53 +84,96 @@ def load_config():
         _LOGGER.error("Error loading configuration file: %s", e)
         sys.exit(1)
 
+def save_config():
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=4)
+        _LOGGER.info("Configuration saved to %s", CONFIG_FILE)
+    except Exception as e:
+        _LOGGER.error("Failed to save configuration: %s", e)
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "unknown"
+
+def detect_alsa_devices():
+    try:
+        devices = sd.query_devices()
+        input_devices = [d["name"] for d in devices if d["max_input_channels"] > 0]
+        _LOGGER.info("Detected ALSA input devices: %s", input_devices)
+        return input_devices
+    except Exception as e:
+        _LOGGER.warning("Could not detect ALSA devices: %s", e)
+        return []
+
 def reload_config():
-    global config, HA_BASE_URL, TOKEN, TTS_ENGINE, STT_URI, STT_FORMAT, VOLUME_SETTING, RMS_THRESHOLD
-    global WAKE_KEYWORD, SLEEP_KEYWORD, ALARM_KEYWORD, CLEAR_ALARM_KEYWORD
-    global LEARN_COMMAND, FORGET_COMMAND, COMMIT_CODE, ACTIVE_TIMEOUT, LLM_URI, WS_API_URL, TTS_API_URL, CHROMADB_URL
-    global STOP_KEYWORD
+    global config, HA_BASE_URL, TOKEN, WS_API_URL, TTS_API_URL, STT_URI, RMS_THRESHOLD
+    global TTS_ENGINE, STT_FORMAT, VOLUME_SETTING, WAKE_KEYWORD, SLEEP_KEYWORD
+    global ALARM_KEYWORD, CLEAR_ALARM_KEYWORD, ACTIVE_TIMEOUT, LLM_URI, STOP_KEYWORD, ALSA_DEVICE
+    global CHROMADB_URL, LLM_MODEL, LEARN_COMMAND, FORGET_COMMAND, COMMIT_CODE
 
     config = load_config()
+
+    if "entity_id" in config:
+       _LOGGER.warning("⚠️ Removing hardcoded entity_id from config to allow HA-managed sync")
+       del config["entity_id"]
+       save_config()
+
+
     HA_BASE_URL = config.get("ha_url")
     TOKEN = config.get("auth_token")
-    TTS_ENGINE = config.get("tts_engine", "tts.google_translate_en_com")
-    STT_URI = config.get("stt_uri") or "http://localhost:10900/inference"
+    WS_API_URL = f"{HA_BASE_URL}/api/websocket"
+    TTS_API_URL = f"{HA_BASE_URL}/api/tts_get_url"
+
+    STT_URI = config.get("stt_uri")
+    RMS_THRESHOLD = float(config.get("rms_threshold", 0.008))
+    TTS_ENGINE = config.get("tts_engine")
     STT_FORMAT = config.get("stt_format", "wav")
-    VOLUME_SETTING = config.get("volume", 0.2)
-    RMS_THRESHOLD = float(config.get("rms_threshold", "0.008"))
-    WAKE_KEYWORD = config.get("wake_keyword", "hey assistant")
-    SLEEP_KEYWORD = config.get("sleep_keyword", "goodbye")
-    ALARM_KEYWORD = config.get("alarm_keyword", "alarm now")
-    CLEAR_ALARM_KEYWORD = config.get("clear_alarm_keyword", "clear alarm")
+    VOLUME_SETTING = float(config.get("volume", 0.3))
+    WAKE_KEYWORD = config.get("wake_keyword")
+    SLEEP_KEYWORD = config.get("sleep_keyword")
+    ALARM_KEYWORD = config.get("alarm_keyword")
+    CLEAR_ALARM_KEYWORD = config.get("clear_alarm_keyword")
+    ACTIVE_TIMEOUT = int(config.get("active_timeout", 30))
+    LLM_URI = config.get("llm_uri")
+    STOP_KEYWORD = config.get("stop_keyword", "assistant stop")
+    ALSA_DEVICE = config.get("alsa_device")
+    CHROMADB_URL = config.get("chromadb_url")
+    LLM_MODEL = config.get("llm_model")
     LEARN_COMMAND = config.get("learn_command", "learn this:")
     FORGET_COMMAND = config.get("forget_command", "forget this:")
     COMMIT_CODE = config.get("commit_code", "1234")
-    ACTIVE_TIMEOUT = config.get("active_timeout", 5)
-    LLM_URI = config.get("llm_uri") or "http://localhost:11434/api/generate"
-    CHROMADB_URL = config.get("chromadb_url")
-    WS_API_URL = f"{HA_BASE_URL}/api/websocket"
-    TTS_API_URL = f"{HA_BASE_URL}/api/tts_get_url"
-    STOP_KEYWORD = config.get("stop_keyword", "assistant stop")
 
-    _LOGGER.info(
-        "Configuration reloaded: TTS_ENGINE=%s, TOKEN=%s, VOLUME_SETTING=%.2f, RMS_THRESHOLD=%.3f, WAKE_KEYWORD=%s, "
-        "SLEEP_KEYWORD=%s, HA_BASE_URL=%s, STT_URI=%s, LLM_URI=%s, CHROMADB_URL=%s, STOP_KEYWORD=%s",
-        TTS_ENGINE, TOKEN, VOLUME_SETTING, RMS_THRESHOLD, WAKE_KEYWORD,
-        SLEEP_KEYWORD, HA_BASE_URL, STT_URI, LLM_URI, CHROMADB_URL, STOP_KEYWORD
-    )
+    _LOGGER.info("Minimal config loaded. Waiting for full config from HA.")
 
-# Initial load and ensure unique_id is present
+# --- Initial Config Bootstrapping ---
 reload_config()
-if "unique_id" not in config:
-    config["unique_id"] = str(uuid.uuid4())
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
-time.sleep(2)
 
-# Report configuration attributes to Home Assistant
+if "unique_id" not in config:
+    config["unique_id"] = f"soundhive_{str(uuid.uuid4())[:8]}"
+    _LOGGER.warning("Generated new unique_id: %s", config["unique_id"])
+
+if "client_ip" not in config or config["client_ip"] == "unknown":
+    config["client_ip"] = get_local_ip()
+    _LOGGER.info("Detected client IP: %s", config["client_ip"])
+    save_config()
+
+if "alsa_devices" not in config:
+    config["alsa_devices"] = detect_alsa_devices()
+    save_config()
+
 def report_config_to_ha(config):
-    # Use the entity_id provided by Home Assistant if available, else fallback to legacy
-    entity_id = config.get("entity_id") or f"media_player.{config.get('unique_id', 'soundhive_unknown')}"
+    entity_id = config.get("entity_id")
+    if not entity_id:
+        _LOGGER.warning("🟡 Skipping report to HA: entity_id not yet received from integration")
+        return
+
     ha_url = config.get("ha_url", "http://localhost:8123")
     token = config.get("auth_token")
 
@@ -139,25 +186,98 @@ def report_config_to_ha(config):
         "state": "idle",
         "attributes": {
             "command": "update_config",
-            **{k: v for k, v in config.items() if k not in ["auth_token", "ha_url", "unique_id", "name"]},
-            "unique_id": config.get("unique_id"),
-            "entity_id": entity_id  # Include entity_id in case HA wants to persist it
+            **{k: v for k, v in config.items() if k not in ["auth_token", "ha_url"]}
         }
     }
+
+    _LOGGER.debug("📤 Sending config attributes to HA:\n%s", json.dumps(state_data["attributes"], indent=2))
 
     try:
         url = f"{ha_url}/api/states/{entity_id}"
         response = requests.post(url, headers=headers, data=json.dumps(state_data))
         response.raise_for_status()
-        _LOGGER.info("✅ Reported config to HA successfully as %s", entity_id)
+        _LOGGER.info("✅ Reported config to HA as %s", entity_id)
     except Exception as e:
-        _LOGGER.error(f"❌ Failed to report config to HA for {entity_id}: {e}")
+        _LOGGER.error("❌ Failed to report config to HA: %s", e)
 
-# Only report if entity_id or unique_id is known
-if config.get("entity_id") or config.get("unique_id"):
-    report_config_to_ha(config)
-else:
-    _LOGGER.warning("⚠️ Skipping report_config_to_ha(): no entity_id or unique_id defined.")
+async def process_state_changed_event(data):
+    global received_initial_config
+
+    event = data.get("event", {})
+    if event.get("event_type") != "state_changed":
+        return
+
+    new_state = event.get("data", {}).get("new_state")
+    if new_state is None:
+        _LOGGER.debug("Skipping event: new_state is None")
+        return
+
+
+    # 🧠 Learn correct entity_id from HA if it’s not already known
+    entity_from_ha = new_state.get("entity_id")
+    if entity_from_ha:
+        if not config.get("entity_id"):
+            config["entity_id"] = entity_from_ha
+            save_config()
+            _LOGGER.info("🧠 Learned entity_id from HA: %s", entity_from_ha)
+        elif config["entity_id"] != entity_from_ha:
+            _LOGGER.debug("Ignoring state change from unrelated entity: %s", entity_from_ha)
+            return
+
+    attributes = new_state.get("attributes", {})
+    command = attributes.get("command")
+
+    if command == "update_config":
+        updated = False
+        for key, val in attributes.items():
+            if config.get(key) != val:
+                config[key] = val
+                updated = True
+
+        if updated:
+            save_config()
+            reload_config()
+            _LOGGER.info("🔄 Config updated from HA attributes.")
+
+        if not received_initial_config:
+            if await wait_until_entity_ready():
+                report_config_to_ha(config)
+                await asyncio.sleep(5)
+                report_config_to_ha(config)
+            else:
+                _LOGGER.warning("Entity not ready. Skipping config report.")
+            received_initial_config = True
+
+
+async def wait_until_entity_ready(timeout=20):
+    entity_id = config.get("entity_id")
+    if not entity_id:
+        _LOGGER.warning("⏳ Cannot wait for HA entity — entity_id is not set.")
+        return False
+
+    url = f"{config['ha_url']}/api/states/{entity_id}"
+    headers = {"Authorization": f"Bearer {config['auth_token']}"}
+
+    for i in range(timeout):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        attrs = data.get("attributes", {})
+                        if "tts_engine" in attrs:
+                            _LOGGER.info("✅ Managed entity %s is active and ready in HA.", entity_id)
+                            return True
+                        else:
+                            _LOGGER.debug("Entity found but missing key attributes: %s", attrs)
+                    else:
+                        _LOGGER.debug("Entity not available yet: HTTP %d", resp.status)
+        except Exception as e:
+            _LOGGER.debug("Error checking entity status: %s", e)
+        await asyncio.sleep(1)
+
+    _LOGGER.error("❌ Timeout: Entity %s not ready in HA after %d seconds", entity_id, timeout)
+    return False
 
 
 # === Helper Functions ===
@@ -635,17 +755,35 @@ async def scheduled_commit(target_hour=2, target_minute=0):
 # === Event Handling ===
 async def process_state_changed_event(event_data):
     _LOGGER.info("Processing state_changed event: %s", event_data)
+
     event = event_data.get("event", {})
     if event.get("event_type") != "state_changed":
         return
-    new_state = event.get("data", {}).get("new_state", {})
+
+    new_state = event.get("data", {}).get("new_state")
+    if new_state is None:
+        _LOGGER.debug("Skipping event: new_state is None")
+        return
+
+    # Learn entity_id from HA if provided
+    entity_from_ha = new_state.get("entity_id")
+    if entity_from_ha:
+        if not config.get("entity_id"):
+            config["entity_id"] = entity_from_ha
+            save_config()
+            _LOGGER.info("🧠 Learned entity_id from HA: %s", entity_from_ha)
+        elif config["entity_id"] != entity_from_ha:
+            _LOGGER.debug("Ignoring event for unrelated entity: %s", entity_from_ha)
+            return
+
     attributes = new_state.get("attributes", {})
     command = attributes.get("command")
+
     if command and "update_config" in command:
-        args = attributes
         try:
             with open(CONFIG_FILE, "r") as f:
                 config_data = json.load(f)
+
             valid_keys = [
                 "tts_engine",
                 "active_timeout",
@@ -656,28 +794,38 @@ async def process_state_changed_event(event_data):
                 "volume",
                 "llm_uri",
                 "alarm_keyword",
+                "chromadb_url",
+                "llm_model",
                 "clear_alarm_keyword",
                 "entity_id",
-                "sleep_keyword"
+                "sleep_keyword",
+                "stop_keyword",
+                "alsa_device"
             ]
+
             updated_fields = []
             for key in valid_keys:
-                if key in args:
-                    config_data[key] = args[key]
+                if key in attributes and config_data.get(key) != attributes[key]:
+                    config_data[key] = attributes[key]
                     updated_fields.append(key)
+
             if not updated_fields:
-                _LOGGER.warning("No valid configuration fields found in update_config command.")
+                _LOGGER.warning("No valid configuration fields changed in update_config command.")
                 return
+
             with open(CONFIG_FILE, "w") as f:
                 json.dump(config_data, f, indent=4)
             _LOGGER.info("Configuration file updated successfully with new fields: %s", updated_fields)
             _LOGGER.info("🔄 Reloading config after update_config")
             reload_config()
+
         except Exception as e:
             _LOGGER.error("Failed to update configuration file: %s", e)
         return
+
+    # Handle STT resume trigger after media finishes
     entity_id = new_state.get("entity_id", "")
-    if entity_id == MEDIA_PLAYER_ENTITY and new_state.get("state") in ["idle", "stopped"]:
+    if entity_id == config.get("entity_id", MEDIA_PLAYER_ENTITY) and new_state.get("state") in ["idle", "stopped"]:
         await clear_stt_queue(stt_priority_queue)
         _LOGGER.info("Media playback finished; STT processing resumed.")
 
@@ -742,7 +890,7 @@ async def process_event(event_data):
         await process_call_service_event(event_data)
     else:
         _LOGGER.debug("Received unsupported event type: %s", event_type)
-
+        
 async def listen_for_events():
     while True:
         try:
@@ -759,9 +907,24 @@ async def listen_for_events():
                     else:
                         _LOGGER.error("Unexpected initial message: %s", initial_msg)
                         return
+
                     await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
                     await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
-                    _LOGGER.info("WebSocket connection established and subscribed to events.")
+                    _LOGGER.info("✅ WebSocket connection established and subscribed to events.")
+
+                    if config.get("entity_id"):
+                        _LOGGER.info("⏳ Waiting for HA to register the managed entity before sending config...")
+                        if await wait_until_entity_ready():
+                            report_config_to_ha(config)
+                        else:
+                            _LOGGER.warning("🟡 Giving up on config sync for now (entity not available in HA)")
+
+                        await asyncio.sleep(5)
+                        _LOGGER.info("📨 Re-sending config to HA (post-delay) to confirm update.")
+                        report_config_to_ha(config)
+                    else:
+                        _LOGGER.warning("🟡 Skipping config report — entity_id not set.")
+
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
@@ -934,36 +1097,6 @@ def stt_thread_func(main_loop, stt_priority_queue):
     asyncio.run(stt_processor())
 
 # === Main Execution and Shutdown Handling ===
-async def listen_for_events():
-    while True:
-        try:
-            _LOGGER.info("Attempting to connect to HA WebSocket...")
-            async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(WS_API_URL) as ws:
-                    initial_msg = await ws.receive_json()
-                    if initial_msg.get("type") == "auth_required":
-                        await ws.send_json({"type": "auth", "access_token": TOKEN})
-                        auth_response = await ws.receive_json()
-                        if auth_response.get("type") != "auth_ok":
-                            _LOGGER.error("WebSocket authentication failed: %s", auth_response)
-                            return
-                    else:
-                        _LOGGER.error("Unexpected initial message: %s", initial_msg)
-                        return
-                    await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
-                    await ws.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
-                    _LOGGER.info("WebSocket connection established and subscribed to events.")
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            data = json.loads(msg.data)
-                            await process_event(data)
-                        elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                            _LOGGER.error("WebSocket connection closed or error occurred. Reconnecting...")
-                            break
-        except Exception as e:
-            _LOGGER.error("Error in WebSocket connection: %s. Reconnecting...", e)
-        await asyncio.sleep(5)
-
 async def log_client_mode():
     while True:
         _LOGGER.info("Current client mode: %s", client_mode)
