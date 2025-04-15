@@ -88,8 +88,20 @@ def load_config():
 
 def save_config():
     try:
+        # Define keys we want to persist across restarts
+        persistent_keys = {
+            "ha_url", "auth_token", "client_ip", "name", "stt_format",
+            "tts_engine", "active_timeout", "rms_threshold", "wake_keyword",
+            "stt_uri", "volume", "llm_uri", "alarm_keyword", "clear_alarm_keyword",
+            "sleep_keyword", "alsa_devices", "chromadb_url", "llm_model",
+            "unique_id", "stop_keyword", "alsa_device", "entity_id", "install_type"
+        }
+
+        cleaned_config = {k: v for k, v in config.items() if k in persistent_keys}
+
         with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=4)
+            json.dump(cleaned_config, f, indent=4)
+
         _LOGGER.info("Configuration saved to %s", CONFIG_FILE)
     except Exception as e:
         _LOGGER.error("Failed to save configuration: %s", e)
@@ -123,10 +135,9 @@ def reload_config():
     config = load_config()
 
     if "entity_id" in config:
-       _LOGGER.warning("⚠️ Removing hardcoded entity_id from config to allow HA-managed sync")
-       del config["entity_id"]
-       save_config()
-
+        _LOGGER.warning("⚠️ Removing hardcoded entity_id from config to allow HA-managed sync")
+        del config["entity_id"]
+        save_config()
 
     HA_BASE_URL = config.get("ha_url")
     TOKEN = config.get("auth_token")
@@ -134,15 +145,15 @@ def reload_config():
     TTS_API_URL = f"{HA_BASE_URL}/api/tts_get_url"
 
     STT_URI = config.get("stt_uri")
-    RMS_THRESHOLD = float(config.get("rms_threshold", 0.008))
+    RMS_THRESHOLD = float(config.get("rms_threshold") or 0.008)
     TTS_ENGINE = config.get("tts_engine")
     STT_FORMAT = config.get("stt_format", "wav")
-    VOLUME_SETTING = float(config.get("volume", 0.3))
+    VOLUME_SETTING = float(config.get("volume") or 0.3)
     WAKE_KEYWORD = config.get("wake_keyword")
     SLEEP_KEYWORD = config.get("sleep_keyword")
     ALARM_KEYWORD = config.get("alarm_keyword")
     CLEAR_ALARM_KEYWORD = config.get("clear_alarm_keyword")
-    ACTIVE_TIMEOUT = int(config.get("active_timeout", 30))
+    ACTIVE_TIMEOUT = int(config.get("active_timeout") or 30)
     LLM_URI = config.get("llm_uri")
     STOP_KEYWORD = config.get("stop_keyword", "assistant stop")
     ALSA_DEVICE = config.get("alsa_device")

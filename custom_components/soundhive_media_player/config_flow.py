@@ -99,10 +99,8 @@ class SoundhiveOptionsFlow(config_entries.OptionsFlow):
         )
 
     async def _get_tts_engines(self):
-        """Return available TTS engines as dropdown options."""
-        tts_entities = [
-            state.entity_id.split(".")[-1]
-            for state in self.hass.states.async_all("tts")
-        ]
-        return sorted(tts_entities)
+        """Return available TTS engines as full entity_id strings (e.g., 'tts.piper')."""
+        return sorted([
+            state.entity_id for state in self.hass.states.async_all("tts")
+        ])
 
