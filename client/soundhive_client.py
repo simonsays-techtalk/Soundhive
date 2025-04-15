@@ -34,6 +34,8 @@ LEARN_BUFFER_TIMEOUT = 10
 logging.basicConfig(level=logging.INFO)
 _LOGGER = logging.getLogger("SoundhiveClient")
 
+_last_reported_config = None
+
 config = None
 received_initial_config = False
 
@@ -169,85 +171,128 @@ if "alsa_devices" not in config:
     save_config()
 
 def report_config_to_ha(config):
+    global _last_reported_config
+
     entity_id = config.get("entity_id")
     if not entity_id:
         _LOGGER.warning("🟡 Skipping report to HA: entity_id not yet received from integration")
         return
 
-    ha_url = config.get("ha_url", "http://localhost:8123")
-    token = config.get("auth_token")
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
+    # Manually construct the attribute set
     state_data = {
         "state": "idle",
         "attributes": {
             "command": "update_config",
-            **{k: v for k, v in config.items() if k not in ["auth_token", "ha_url"]}
+            "tts_engine": config.get("tts_engine"),
+            "rms_threshold": config.get("rms_threshold", 0.008),
+            "stt_uri": config.get("stt_uri"),
+            "llm_uri": config.get("llm_uri"),
+            "llm_model": config.get("llm_model"),
+            "chromadb_url": config.get("chromadb_url"),
+            "wake_keyword": config.get("wake_keyword"),
+            "sleep_keyword": config.get("sleep_keyword"),
+            "active_timeout": config.get("active_timeout", 30),
+            "volume": config.get("volume", 0.4),
+            "alarm_keyword": config.get("alarm_keyword", "alarm now"),
+            "clear_alarm_keyword": config.get("clear_alarm_keyword", "clear alarm"),
+            "stop_keyword": config.get("stop_keyword", "stop"),
+            "client_ip": get_local_ip() or "0.0.0.0",
+            "alsa_devices": config.get("alsa_devices", []),
+            "alsa_device": config.get("alsa_device", "default"),
+            "friendly_name": config.get("name", "Soundhive Client"),
+            "supported_features": 22021
         }
     }
 
-    _LOGGER.debug("📤 Sending config attributes to HA:\n%s", json.dumps(state_data["attributes"], indent=2))
+    # Avoid sending redundant data
+    if _last_reported_config == state_data:
+        _LOGGER.debug("🟡 Skipping redundant config report to HA — no changes detected.")
+        return
 
-    try:
-        url = f"{ha_url}/api/states/{entity_id}"
-        response = requests.post(url, headers=headers, data=json.dumps(state_data))
-        response.raise_for_status()
-        _LOGGER.info("✅ Reported config to HA as %s", entity_id)
-    except Exception as e:
-        _LOGGER.error("❌ Failed to report config to HA: %s", e)
+    _last_reported_config = state_data
+    _LOGGER.info("🧠 Skipping HTTP state update — entity is managed by integration. Config will be synced via WebSocket only.")
 
 async def process_state_changed_event(data):
     global received_initial_config
 
-    event = data.get("event", {})
-    if event.get("event_type") != "state_changed":
+    if data is None:
+        _LOGGER.warning("⚠️ Received None as event data; skipping.")
         return
 
-    new_state = event.get("data", {}).get("new_state")
-    if new_state is None:
-        _LOGGER.debug("Skipping event: new_state is None")
-        return
-
-
-    # 🧠 Learn correct entity_id from HA if it’s not already known
-    entity_from_ha = new_state.get("entity_id")
-    if entity_from_ha:
-        if not config.get("entity_id"):
-            config["entity_id"] = entity_from_ha
-            save_config()
-            _LOGGER.info("🧠 Learned entity_id from HA: %s", entity_from_ha)
-        elif config["entity_id"] != entity_from_ha:
-            _LOGGER.debug("Ignoring state change from unrelated entity: %s", entity_from_ha)
+    try:
+        event = data.get("event")
+        if not event:
+            _LOGGER.warning("⚠️ Skipping event: 'event' key is missing or None")
             return
 
-    attributes = new_state.get("attributes", {})
-    command = attributes.get("command")
+        if event.get("event_type") != "state_changed":
+            return
 
-    if command == "update_config":
-        updated = False
-        for key, val in attributes.items():
-            if config.get(key) != val:
-                config[key] = val
-                updated = True
+        event_data = event.get("data", {})
+        entity_from_event = event_data.get("entity_id")
+        new_state = event_data.get("new_state")
+        if new_state is None:
+            _LOGGER.debug("Skipping event: new_state is None")
+            return
 
-        if updated:
-            save_config()
-            reload_config()
-            _LOGGER.info("🔄 Config updated from HA attributes.")
+        # Prefer entity_id from new_state, fallback to event
+        entity_id = new_state.get("entity_id") or entity_from_event
 
-        if not received_initial_config:
-            if await wait_until_entity_ready():
-                report_config_to_ha(config)
-                await asyncio.sleep(5)
-                report_config_to_ha(config)
-            else:
-                _LOGGER.warning("Entity not ready. Skipping config report.")
-            received_initial_config = True
+        # 🧠 Learn or update entity_id if it looks like a Soundhive media player
+        if entity_id and entity_id.startswith("media_player.soundhive_"):
+            if config.get("entity_id") != entity_id:
+                config["entity_id"] = entity_id
+                save_config()
+                _LOGGER.info("🧠 Synced entity_id from HA: %s", entity_id)
 
+        # Ignore state changes from unrelated entities
+        if config.get("entity_id") != entity_id:
+            _LOGGER.debug("Ignoring state change from unrelated entity: %s", entity_id)
+            return
+
+        attributes = new_state.get("attributes", {})
+        command = attributes.get("command")
+
+        if command == "update_config":
+            updated = False
+            for key, val in attributes.items():
+                # Avoid clobbering the entity_id field
+                if key != "entity_id" and config.get(key) != val:
+                    config[key] = val
+                    updated = True
+
+            if updated:
+                save_config()
+                reload_config()
+                _LOGGER.info("🔄 Config updated from HA attributes.")
+
+            if not received_initial_config:
+                if await wait_until_entity_ready():
+                    report_config_to_ha(config)
+                    await asyncio.sleep(5)
+                    report_config_to_ha(config)
+                else:
+                    _LOGGER.warning("Entity not ready. Skipping config report.")
+                received_initial_config = True
+            return
+
+        # 🔄 Detect playback finish and resume STT
+        new_status = new_state.get("state")
+        old_state_data = event_data.get("old_state")
+        old_status = old_state_data.get("state") if old_state_data else None
+
+        _LOGGER.debug("🧪 Media player state changed: %s → %s", old_status, new_status)
+
+        if (
+            entity_id == config.get("entity_id") and
+            old_status == "playing" and
+            new_status in ["idle", "stopped"]
+        ):
+            await clear_stt_queue(stt_priority_queue)
+            _LOGGER.info("✅ Media playback finished; STT processing resumed.")
+
+    except Exception as e:
+        _LOGGER.error("❌ Error processing state_changed event: %s", e)
 
 async def wait_until_entity_ready(timeout=20):
     entity_id = config.get("entity_id")
@@ -423,8 +468,11 @@ async def set_volume(level):
 
 def on_media_end(event):
     global tts_finished_time
+    if current_player is None or current_player.get_state() != vlc.State.Ended:
+        _LOGGER.debug("Ignoring MediaPlayerEndReached due to inconsistent state.")
+        return
     tts_finished_time = time.monotonic()
-    _LOGGER.info("Media playback finished (VLC event); setting cooldown timestamp.")
+    _LOGGER.info("✅ Real media playback finished (VLC event); setting cooldown timestamp.")
 
 # === Audio Streaming Functions ===
 def stream_audio_chunks(chunk_duration=4, samplerate=16000, channels=1):
@@ -751,83 +799,6 @@ async def scheduled_commit(target_hour=2, target_minute=0):
         _LOGGER.info("Waiting %.0f seconds for scheduled commit.", wait_seconds)
         await asyncio.sleep(wait_seconds)
         await handle_commit_command()
-
-# === Event Handling ===
-async def process_state_changed_event(event_data):
-    _LOGGER.info("Processing state_changed event: %s", event_data)
-
-    event = event_data.get("event", {})
-    if event.get("event_type") != "state_changed":
-        return
-
-    new_state = event.get("data", {}).get("new_state")
-    if new_state is None:
-        _LOGGER.debug("Skipping event: new_state is None")
-        return
-
-    # Learn entity_id from HA if provided
-    entity_from_ha = new_state.get("entity_id")
-    if entity_from_ha:
-        if not config.get("entity_id"):
-            config["entity_id"] = entity_from_ha
-            save_config()
-            _LOGGER.info("🧠 Learned entity_id from HA: %s", entity_from_ha)
-        elif config["entity_id"] != entity_from_ha:
-            _LOGGER.debug("Ignoring event for unrelated entity: %s", entity_from_ha)
-            return
-
-    attributes = new_state.get("attributes", {})
-    command = attributes.get("command")
-
-    if command and "update_config" in command:
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                config_data = json.load(f)
-
-            valid_keys = [
-                "tts_engine",
-                "active_timeout",
-                "rms_threshold",
-                "auth_token",
-                "wake_keyword",
-                "stt_uri",
-                "volume",
-                "llm_uri",
-                "alarm_keyword",
-                "chromadb_url",
-                "llm_model",
-                "clear_alarm_keyword",
-                "entity_id",
-                "sleep_keyword",
-                "stop_keyword",
-                "alsa_device"
-            ]
-
-            updated_fields = []
-            for key in valid_keys:
-                if key in attributes and config_data.get(key) != attributes[key]:
-                    config_data[key] = attributes[key]
-                    updated_fields.append(key)
-
-            if not updated_fields:
-                _LOGGER.warning("No valid configuration fields changed in update_config command.")
-                return
-
-            with open(CONFIG_FILE, "w") as f:
-                json.dump(config_data, f, indent=4)
-            _LOGGER.info("Configuration file updated successfully with new fields: %s", updated_fields)
-            _LOGGER.info("🔄 Reloading config after update_config")
-            reload_config()
-
-        except Exception as e:
-            _LOGGER.error("Failed to update configuration file: %s", e)
-        return
-
-    # Handle STT resume trigger after media finishes
-    entity_id = new_state.get("entity_id", "")
-    if entity_id == config.get("entity_id", MEDIA_PLAYER_ENTITY) and new_state.get("state") in ["idle", "stopped"]:
-        await clear_stt_queue(stt_priority_queue)
-        _LOGGER.info("Media playback finished; STT processing resumed.")
 
 async def process_call_service_event(event_data):
     _LOGGER.info("Processing call_service event: %s", event_data)
