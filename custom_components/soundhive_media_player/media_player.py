@@ -5,14 +5,28 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.components.media_player.const import MediaPlayerState
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    entity = hass.data[DOMAIN]["entity"]
-    async_add_entities([entity], update_before_add=True)
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up a config entry."""
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # ✅ Fix: this listener must only accept the entry
+    async def update_listener(updated_entry: ConfigEntry) -> None:
+        await hass.config_entries.async_reload(updated_entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+    return True
+
+
 
 class SoundhiveMediaPlayer(MediaPlayerEntity):
     def __init__(self, config_entry: ConfigEntry):
@@ -21,6 +35,7 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._volume = 0.4
         self._attr_name = "Soundhive"
         self._attr_unique_id = "soundhive_default"
+        self._client_ip = None
         self._load_config()
 
     def _load_config(self):
@@ -47,7 +62,7 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
         self._clear_alarm_keyword = opt("clear_alarm_keyword")
         self._alsa_device = opt("alsa_device")
         self._alsa_devices = opt("alsa_devices", [])
-        self._client_ip = data.get("client_ip")
+        self._client_ip = opt("client_ip")
 
     def config_entry_updated(self, new_entry: ConfigEntry):
         self._entry = new_entry
@@ -73,6 +88,13 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
 
     @property
     def extra_state_attributes(self):
+        # Retrieve current IP from state if updated by client
+        dynamic_ip = self._client_ip
+        if self.hass and self.entity_id:
+            state = self.hass.states.get(self.entity_id)
+            if state:
+                dynamic_ip = state.attributes.get("client_ip", dynamic_ip)
+
         return {
             "tts_engine": self._tts_engine,
             "rms_threshold": self._rms_threshold,
@@ -89,7 +111,7 @@ class SoundhiveMediaPlayer(MediaPlayerEntity):
             "clear_alarm_keyword": self._clear_alarm_keyword,
             "alsa_device": self._alsa_device,
             "alsa_devices": self._alsa_devices,
-            "client_ip": self._client_ip,
+            "client_ip": dynamic_ip,
             "friendly_name": self._attr_name,
             "media_state": self._state,
             "entity_id": self.entity_id,

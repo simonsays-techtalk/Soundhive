@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, quote_plus
 
 # --- Configuration and Global Constants ---
 CONFIG_FILE = "soundhive_config.json"
-VERSION = "4.0.0.6 ALSA Device Discovery + IP Sync"
+VERSION = "4.0.0.9 ALSA Device Discovery + IP Sync"
 MEDIA_PLAYER_ENTITY = "media_player.soundhive_media_player"
 COOLDOWN_PERIOD = 2
 STT_QUEUE_MAXSIZE = 50
@@ -113,8 +113,9 @@ def get_local_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
-        return "unknown"
+    except Exception as e:
+        _LOGGER.error("Error determining local IP: %s", e)
+        return None
 
 def detect_alsa_devices():
     try:
@@ -134,26 +135,35 @@ def reload_config():
 
     config = load_config()
 
-    if "entity_id" in config:
-        _LOGGER.warning("⚠️ Removing hardcoded entity_id from config to allow HA-managed sync")
+    # Only remove entity_id if it's still using the default generated format
+    if config.get("entity_id", "").startswith("media_player.soundhive_") and config["entity_id"].endswith(config.get("unique_id", "")):
+        _LOGGER.warning("⚠️ Removing placeholder entity_id to allow HA-managed sync")
         del config["entity_id"]
         save_config()
 
+    # Auto-populate client_ip if missing
+    if not config.get("client_ip"):
+        detected_ip = get_local_ip()
+        if detected_ip:
+            config["client_ip"] = detected_ip
+            _LOGGER.info("🌍 Detected local IP: %s", detected_ip)
+            save_config()
+        else:
+            _LOGGER.warning("⚠️ Could not determine local IP address.")
+
+    # Load required config values
     HA_BASE_URL = config.get("ha_url")
     TOKEN = config.get("auth_token")
     WS_API_URL = f"{HA_BASE_URL}/api/websocket"
     TTS_API_URL = f"{HA_BASE_URL}/api/tts_get_url"
 
     STT_URI = config.get("stt_uri")
-    RMS_THRESHOLD = float(config.get("rms_threshold") or 0.008)
-    TTS_ENGINE = config.get("tts_engine")
     STT_FORMAT = config.get("stt_format", "wav")
-    VOLUME_SETTING = float(config.get("volume") or 0.3)
+    TTS_ENGINE = config.get("tts_engine")
     WAKE_KEYWORD = config.get("wake_keyword")
     SLEEP_KEYWORD = config.get("sleep_keyword")
     ALARM_KEYWORD = config.get("alarm_keyword")
     CLEAR_ALARM_KEYWORD = config.get("clear_alarm_keyword")
-    ACTIVE_TIMEOUT = int(config.get("active_timeout") or 30)
     LLM_URI = config.get("llm_uri")
     STOP_KEYWORD = config.get("stop_keyword", "assistant stop")
     ALSA_DEVICE = config.get("alsa_device")
@@ -162,6 +172,25 @@ def reload_config():
     LEARN_COMMAND = config.get("learn_command", "learn this:")
     FORGET_COMMAND = config.get("forget_command", "forget this:")
     COMMIT_CODE = config.get("commit_code", "1234")
+
+    # Safe type conversions
+    try:
+        RMS_THRESHOLD = float(config.get("rms_threshold", 0.008))
+    except (TypeError, ValueError):
+        RMS_THRESHOLD = 0.008
+        _LOGGER.warning("Invalid rms_threshold. Falling back to 0.008")
+
+    try:
+        VOLUME_SETTING = float(config.get("volume", 0.3))
+    except (TypeError, ValueError):
+        VOLUME_SETTING = 0.3
+        _LOGGER.warning("Invalid volume setting. Falling back to 0.3")
+
+    try:
+        ACTIVE_TIMEOUT = int(config.get("active_timeout", 30))
+    except (TypeError, ValueError):
+        ACTIVE_TIMEOUT = 30
+        _LOGGER.warning("Invalid active_timeout. Falling back to 30")
 
     _LOGGER.info("Minimal config loaded. Waiting for full config from HA.")
 
@@ -174,8 +203,9 @@ if "unique_id" not in config:
 
 if "client_ip" not in config or config["client_ip"] == "unknown":
     config["client_ip"] = get_local_ip()
-    _LOGGER.info("Detected client IP: %s", config["client_ip"])
+    _LOGGER.info("📡 Detected client IP: %s", config["client_ip"])
     save_config()
+    report_config_to_ha(config)  # Optional push immediately
 
 if "alsa_devices" not in config:
     config["alsa_devices"] = detect_alsa_devices()
